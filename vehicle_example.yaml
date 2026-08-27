@@ -10,7 +10,7 @@ mass_kg: 2.2                 # measured takeoff weight, battery included
 n_motors: 4
 
 battery_cells: 4             # 4 = 4S
-battery_capacity_mah: 5200
+battery_capacity_mah: 5000
 
 # From the propeller datasheet ("thrust limitation")
 prop_thrust_limit_g: 1200    # T1045II is rated 1.2 kg per prop

@@ -20,6 +20,22 @@ Each axis needs **at least 5 s** and all five model-coefficient variances
 below a threshold; if an axis takes longer than **20 s** the whole run
 aborts. It also aborts on pilot stick input (>5%) or a flight-mode change.
 
+## "Did this log even involve an autotune?"
+
+The report always answers this, in the **Autotune** section, one of three ways:
+
+- *"This log contains an autotune run"* — the `autotune_attitude_control_status`
+  topic shows states beyond IDLE/INIT. The finding lists the identification
+  window and which axes ran; the per-axis judgements below follow it.
+- *"No autotune was run in this flight"* — the topic exists (the module is
+  compiled in and `MC_AT_EN` set) but the state machine never left IDLE, i.e.
+  the tune was never commanded. Gains flown are whatever was already saved.
+- *"No autotune in this log"* — the topic was never logged at all.
+
+Note that the mere presence of the topic is not proof of a tune, which is why
+findings that depend on excitation (e.g. inflated rate-tracking RMS) key off
+the *run* detection, not off the topic.
+
 ## How to judge a run from the log
 
 - **Convergence time per axis.** 5.0 s = clean. 10–15 s = the estimator was

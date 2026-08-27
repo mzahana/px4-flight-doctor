@@ -14,6 +14,7 @@ from analyzer.core import Log, Severity
 from analyzer.vehicle import VehicleSpec, load_spec
 from analyzer.propulsion import hover_state
 from analyzer.checks import run_all
+from analyzer.summary import flight_summary
 from analyzer.pdf import build_pdf
 from analyzer.plots import generate_all
 from analyzer.iplots import generate_interactive
@@ -65,6 +66,11 @@ def analyze():
         log = Log(lpath)
         hover = hover_state(log)
         findings, errors = run_all(log, spec, hover)
+        try:
+            summary = flight_summary(log, spec, hover)
+        except Exception as e:      # the dashboard is never worth failing the run over
+            summary = {"items": [], "modes": [], "header": {},
+                       "error": f"{type(e).__name__}: {e}"}
         plots = generate_all(log, spec)          # static PNG/SVG for the PDF
         iplots = generate_interactive(log, spec)  # plotly specs for the UI
         w = log.in_air_window()
@@ -78,10 +84,10 @@ def analyze():
         os.rmdir(tmpdir)
     rid = uuid.uuid4().hex[:12]
     RESULTS[rid] = {"findings": findings, "errors": errors, "meta": meta,
-                    "plots": plots, "iplots": iplots}
+                    "plots": plots, "iplots": iplots, "summary": summary}
     counts = {s.label: sum(1 for f in findings if f.severity == s) for s in Severity}
     return jsonify(
-        id=rid, meta=meta, counts=counts, errors=errors,
+        id=rid, meta=meta, counts=counts, errors=errors, summary=summary,
         plots=[{"id": pl["id"], "title": pl["title"], "caption": pl["caption"]} for pl in iplots],
         findings=[{
             "severity": int(f.severity), "severity_label": f.severity.label,

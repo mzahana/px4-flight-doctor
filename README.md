@@ -41,7 +41,11 @@ px4doctor-web
 ```
 
 Drag in the `.ulg`, optionally attach a vehicle YAML or type mass / OAT /
-battery fields, and click **Analyze**. The report renders as color-coded
+battery fields, and click **Analyze**. The results open with a **flight
+dashboard** (duration, altitude, speed, distance, tilt, pack voltage/sag,
+current, energy used, GPS quality, hover operating point, plus a flight-mode
+time bar), then tabs for **Actions**, **Findings** and **Plots**. The
+findings render as color-coded
 cards (filterable by severity, with a prioritized action list and in-app
 background docs) plus **interactive annotated plots** (Plotly, vendored
 locally - works offline): drag to box-zoom, scroll to zoom, double-click to
@@ -52,8 +56,10 @@ same figures embedded.
 Plots: flight overview (altitude / cell voltage / current), per-motor
 commands with saturation & headroom annotations, rate tracking per axis,
 in-flight vibration spectra (FFT with dominant peak, Nyquist and LPF
-markers), and autotune convergence (model variance vs threshold + gain
-evolution) - autotune phases are shaded on every time plot - plus
+markers), a per-axis gyro **spectrogram** (PSD vs time, so rpm-driven and
+intermittent vibration is visible), and autotune convergence (model variance vs threshold + gain
+evolution) - every time plot is tinted by flight mode (mode name printed above
+the window) with autotune phases shaded on top - plus
 magnetic-field-vs-current and battery V-I resistance scatter plots.
 
 ### Command line
@@ -81,7 +87,7 @@ for your drone. Every field is optional — more fields unlock deeper checks.
 
 | Category | Checks |
 |---|---|
-| Autotune | state sequence, per-axis convergence time, estimate stability at hand-off, gain sanity |
+| Autotune | whether the log contains an autotune run at all, state sequence, per-axis convergence time, estimate stability at hand-off, gain sanity |
 | Propulsion | hover throttle vs bench prediction (voltage+density corrected), thrust/weight, motor saturation, PWM ceiling clipping, per-motor thrust in grams, yaw-bias / CG imbalance, THR_MDL_FAC fit, current prediction |
 | Vibration | IMU metrics, accel clipping, FFT peak identification, notch filter config, imbalanced-prop metric |
 | EKF | innovation test ratios, fault/timeout flags, in-flight resets |
@@ -224,6 +230,7 @@ analyzer/
   checks.py              all analysis checks
   plots.py               static matplotlib figures (for PDF export)
   iplots.py              interactive Plotly figure specs (for the web UI)
+  summary.py             at-a-glance flight stats for the web dashboard
   report.py              terminal + Markdown rendering
   pdf.py                 structured PDF generation (reportlab)
   webapp.py              the Flask app

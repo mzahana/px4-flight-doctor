@@ -5,7 +5,7 @@ Zoom/pan and per-trace toggling come free from Plotly's UI.
 """
 import numpy as np
 
-from .plots import _autotune_spans, MOTOR_COLORS, C
+from .plots import _autotune_spans, _spectrogram, mode_color, MOTOR_COLORS, C
 
 
 def _r(arr, nd=4):
@@ -39,6 +39,35 @@ def _span_shapes(spans):
                           text=f"<b>{lbl}</b>", showarrow=False, yanchor="bottom",
                           font=dict(size=10, color="#8a6d1a")))
     return shapes, notes
+
+
+def _mode_shapes(lay, log):
+    """Tint the plot background by flight mode and label each window on top."""
+    spans = log.mode_spans()
+    if not spans:
+        return
+    total = float(spans[-1][1] - spans[0][0]) or 1.0
+    row, prev_mid = 0, -1e18
+    for t0, t1, name in spans:
+        c = mode_color(name)
+        lay["shapes"].append(dict(type="rect", xref="x", yref="paper", x0=t0, x1=t1,
+                                  y0=0, y1=1, fillcolor=c, opacity=0.08,
+                                  line=dict(width=0), layer="below"))
+        lay["shapes"].append(dict(type="line", xref="x", yref="paper", x0=t0, x1=t0,
+                                  y0=0, y1=1, line=dict(color=c, width=1),
+                                  opacity=0.45, layer="below"))
+        # drop labels for slivers and stagger the rest over two rows, so a
+        # mode-hopping flight does not produce a row of overlapping names
+        need = 0.011 * total * max(len(name), 4)
+        if (t1 - t0) < min(need, 0.05 * total):
+            continue
+        mid = (t0 + t1) / 2
+        row = 0 if mid - prev_mid > 0.10 * total else 1 - row
+        lay["annotations"].append(dict(x=mid, y=1.03 + 0.045 * row, xref="x", yref="paper",
+                                       text=f"<b>{name}</b>", showarrow=False,
+                                       yanchor="bottom", font=dict(size=10, color=c)))
+        prev_mid = mid
+    lay["margin"]["t"] = max(lay["margin"].get("t", 45), 86)
 
 
 def _hline(y, color, text, yref="y", dash="dash"):
@@ -92,6 +121,7 @@ def ip_overview(log, spec):
                                        text=f"min {vc[i]:.2f} V/cell", showarrow=True,
                                        arrowcolor=C["red"], font=dict(size=10, color=C["red"]),
                                        ax=25, ay=20))
+    _mode_shapes(lay, log)
     sh, an = _span_shapes(_autotune_spans(log))
     lay["shapes"] += sh; lay["annotations"] += an
     w = log.in_air_window()
@@ -100,7 +130,8 @@ def ip_overview(log, spec):
             s, n = _vline(x, C["grey"], lbl)
             lay["shapes"].append(s); lay["annotations"].append(n)
     return ("overview", "Flight overview",
-            "Altitude, battery cell voltage and pack current. Autotune phases shaded. "
+            "Altitude, battery cell voltage and pack current. Flight-mode windows are "
+            "tinted (mode name on top), autotune phases shaded amber. "
             "Drag to zoom, double-click to reset, click legend entries to hide traces.",
             dict(data=data, layout=lay))
 
@@ -139,6 +170,7 @@ def ip_motors(log, spec):
                     text=f"<b>hit configured ceiling (PWM max {hi:.0f})</b>",
                     showarrow=True, arrowcolor=C["red"], ax=40, ay=35,
                     font=dict(size=10, color=C["red"])))
+    _mode_shapes(lay, log)
     sh, an = _span_shapes(_autotune_spans(log))
     lay["shapes"] += sh; lay["annotations"] += an
     return ("motors", "Motor commands",
@@ -165,6 +197,7 @@ def ip_rates(log, spec):
             title=f"{name} [deg/s]", domain=doms[i])
     lay = _layout("Rate tracking: setpoint vs actual", height=560,
                   xaxis=dict(title="time [s]", anchor="y3"), **axes)
+    _mode_shapes(lay, log)
     sh, an = _span_shapes(_autotune_spans(log))
     lay["shapes"] += sh; lay["annotations"] += an
     return ("rates", "Rate tracking",
@@ -212,6 +245,9 @@ def ip_vibration(log, spec):
                   xaxis2=dict(title="frequency [Hz]", domain=[0.54, 1], anchor="y2"),
                   yaxis2=dict(title="gyro amplitude [rad/s]", anchor="x2"))
     lay["hovermode"] = "closest"
+    lay["legend"] = dict(orientation="h", y=-0.18, x=0.5, xanchor="center",
+                         font=dict(size=10))
+    lay["margin"]["b"] = 60
     for ya, xa in (("y", "x"), ("y2", "x2")):
         f0, v0 = peaks[ya]
         lay["annotations"].append(dict(x=f0, y=v0, xref=xa, yref=ya,
@@ -220,15 +256,17 @@ def ip_vibration(log, spec):
                                        font=dict(size=10, color=C["red"])))
         lay["shapes"].append(dict(type="line", xref=xa, yref="paper", x0=nyq, x1=nyq,
                                   y0=0, y1=1, line=dict(color=C["grey"], width=1, dash="dash")))
-    lay["annotations"].append(dict(x=nyq, y=0.97, xref="x", yref="paper", text="Nyquist",
-                                   showarrow=False, xanchor="right", font=dict(size=9, color=C["grey"])))
+    lay["annotations"].append(dict(x=nyq, y=0.02, xref="x", yref="paper", text="Nyquist",
+                                   showarrow=False, textangle=-90, xanchor="right",
+                                   yanchor="bottom", font=dict(size=9, color=C["grey"])))
     cutoff = log.param("IMU_GYRO_CUTOFF")
     if cutoff:
         lay["shapes"].append(dict(type="line", xref="x2", yref="paper", x0=cutoff, x1=cutoff,
                                   y0=0, y1=1, line=dict(color=C["green"], width=1, dash="dot")))
-        lay["annotations"].append(dict(x=cutoff, y=0.90, xref="x2", yref="paper",
+        lay["annotations"].append(dict(x=cutoff, y=0.02, xref="x2", yref="paper",
                                        text=f"gyro LPF {cutoff:.0f} Hz", showarrow=False,
-                                       xanchor="left", font=dict(size=9, color=C["green"])))
+                                       textangle=-90, xanchor="left", yanchor="bottom",
+                                       font=dict(size=9, color=C["green"])))
     return ("vibration", "Vibration spectrum",
             "FFT of raw accel (left) and gyro (right) during flight. Put a notch on the "
             "dominant peak; energy near Nyquist aliases into the control band.",
@@ -254,6 +292,7 @@ def ip_autotune(log, spec):
                   yaxis2=dict(title="gain estimates", domain=[0, 0.45], rangemode="tozero"))
     s, n = _hline(50, C["red"], "convergence threshold (50)")
     lay["shapes"].append(s); lay["annotations"].append(n)
+    _mode_shapes(lay, log)
     spans = _autotune_spans(log)
     sh, an = _span_shapes(spans)
     lay["shapes"] += sh; lay["annotations"] += an
@@ -301,14 +340,16 @@ def ip_mag_power(log, spec):
                      name=f"fit {p[0]:+.2f} mG/A", xaxis="x2", yaxis="y3",
                      line=dict(color=C["red"], width=2)))
     lay = _layout("Magnetic field vs power draw", height=420,
-                  xaxis=dict(title="time [s]", domain=[0, 0.58]),
+                  xaxis=dict(title="time [s]", domain=[0, 0.50]),
                   yaxis=dict(title="|B| [mG]", titlefont=dict(color=C["blue"])),
                   yaxis2=dict(title="current [A]", overlaying="y", side="right",
                               titlefont=dict(color=C["purple"]), showgrid=False),
-                  xaxis2=dict(title="current [A]", domain=[0.68, 1], anchor="y3"),
+                  xaxis2=dict(title="current [A]", domain=[0.70, 1], anchor="y3"),
                   yaxis3=dict(title="|B| [mG]", anchor="x2"))
     lay["hovermode"] = "closest"
-    lay["annotations"].append(dict(x=0.70, y=1.02, xref="paper", yref="paper",
+    _mode_shapes(lay, log)
+    lay["annotations"].append(dict(x=0.70, y=1.005, xref="paper", yref="paper",
+                                   xanchor="left", yanchor="bottom",
                                    text=f"<b>corr = {r:+.2f}</b>", showarrow=False,
                                    font=dict(size=12, color=C["red"] if abs(r) > 0.5 else C["green"])))
     return ("magpower", "Magnetic field vs power",
@@ -351,8 +392,69 @@ def ip_batt_ri(log, spec):
             "the pack resistance - set BAT1_R_INTERNAL to the per-cell value.",
             dict(data=data, layout=lay))
 
-ALL_IPLOTS = [ip_overview, ip_motors, ip_rates, ip_vibration, ip_autotune,
-              ip_mag_power, ip_batt_ri]
+# --------------------------------------------------------------------------- #
+def ip_vibe_spectrogram(log, spec):
+    sc = log.get("sensor_combined")
+    if sc is None:
+        return None
+    t = log.t(sc)
+    if len(t) < 4096:
+        return None
+    data, axes = [], {}
+    doms = [[0.70, 1.0], [0.35, 0.65], [0.0, 0.30]]
+    lo, hi = None, None
+    for i, name in enumerate(("roll", "pitch", "yaw")):
+        r = _spectrogram(t, sc[f"gyro_rad[{i}]"].astype(float), target_cols=160)
+        if r is None:
+            return None
+        tt, fr, P = r
+        sel = fr > 2
+        db = 10 * np.log10(P[sel] + 1e-12)
+        if lo is None:                      # one shared color scale for all three
+            lo, hi = float(np.percentile(db, 40)), float(np.percentile(db, 99.9))
+        ya = "y" if i == 0 else f"y{i+1}"
+        data.append(dict(type="heatmap", x=_r(tt, 1), y=_r(fr[sel], 1),
+                         z=[[round(float(v), 1) for v in row] for row in db],
+                         name=name, yaxis=ya, xaxis="x", colorscale="Magma",
+                         zmin=lo, zmax=hi, showscale=(i == 0),
+                         colorbar=dict(title="PSD<br>[dB]", thickness=12, len=1.0),
+                         hovertemplate=(f"{name}<br>t=%{{x:.0f}}s  %{{y:.0f}} Hz"
+                                        "<br>%{z:.0f} dB<extra></extra>")))
+        axes["yaxis" if i == 0 else f"yaxis{i+1}"] = dict(
+            title=f"{name} [Hz]", domain=doms[i])
+    lay = _layout("Gyro spectrogram - vibration energy vs time", height=620,
+                  xaxis=dict(title="time [s]", anchor="y3"), **axes)
+    lay["hovermode"] = "closest"
+    lay["showlegend"] = False
+    cutoff = log.param("IMU_GYRO_CUTOFF")
+    if cutoff:
+        for ya in ("y", "y2", "y3"):
+            lay["shapes"].append(dict(type="line", xref="paper", yref=ya, x0=0, x1=1,
+                                      y0=cutoff, y1=cutoff,
+                                      line=dict(color="#7fd3ff", width=1, dash="dot")))
+        lay["annotations"].append(dict(x=0.99, y=cutoff, xref="paper", yref="y",
+                                       text=f"gyro LPF {cutoff:.0f} Hz", showarrow=False,
+                                       xanchor="right", yanchor="bottom",
+                                       font=dict(size=9, color="#7fd3ff")))
+    w = log.in_air_window()
+    if w:
+        for x, lbl in ((w[0], "takeoff"), (w[1], "landing")):
+            lay["shapes"].append(dict(type="line", xref="x", yref="paper", x0=x, x1=x,
+                                      y0=0, y1=1,
+                                      line=dict(color="#ffffff", width=1, dash="dot")))
+            lay["annotations"].append(dict(x=x, y=1.0, xref="x", yref="paper", text=lbl,
+                                           showarrow=False, xanchor="left", yanchor="bottom",
+                                           font=dict(size=9, color=C["grey"])))
+    return ("spectrogram", "Vibration spectrogram",
+            "Gyro power spectral density vs time, one panel per body axis. Horizontal "
+            "bright lines are fixed-frequency resonances; lines that sweep with throttle "
+            "are rpm-driven prop order - those are what a dynamic notch tracks. Broadband "
+            "brightening partway through a flight usually means something came loose.",
+            dict(data=data, layout=lay))
+
+
+ALL_IPLOTS = [ip_overview, ip_motors, ip_rates, ip_vibration, ip_vibe_spectrogram,
+              ip_autotune, ip_mag_power, ip_batt_ri]
 
 
 def generate_interactive(log, spec):

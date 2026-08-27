@@ -17,6 +17,18 @@ Two rules of thumb when acting on a report:
 2. **One change per flight** when possible. If you change five parameters and
    the next flight is worse, you learn nothing.
 
+## Reading the plots
+
+Every time-axis plot is tinted by **flight mode** (`vehicle_status.nav_state`),
+with the mode name printed above the window it covers — POSCTL, MANUAL, ACRO,
+AUTO_* and so on, each with its own color. Amber bands on top of that tint are
+**autotune identification phases** (ROLL/PITCH/YAW ID). Dotted grey verticals
+mark takeoff and landing. A mode change mid-run matters: autotune aborts on
+one, and tracking errors are only comparable within the same mode.
+
+The **Flight** section lists the same mode sequence in text, with the airborne
+duration of each mode.
+
 Every finding that has deeper math behind it links to one of the docs in this
 folder. They use real numbers from an example drone (Holybro X500 V2, 2.2 kg,
 AIR2216II motors, T1045II props) so you can follow along with a calculator.

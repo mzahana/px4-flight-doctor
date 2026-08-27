@@ -26,7 +26,8 @@ same four steps:
    degrade gracefully when a field is `None`.
 2. `core.Log` — thin `pyulog` wrapper. `log.get(topic, instance)` returns a cached topic dict or
    `None`, `log.t(data)` converts timestamps to seconds, `log.param(name, default)` reads initial
-   params. `in_air_window()` and `hover_mask()` define the flight phases nearly every check uses.
+   params. `in_air_window()` and `hover_mask()` define the flight phases nearly every check uses;
+   `mode_spans()` returns the `nav_state` timeline that both plot back-ends shade.
 3. `propulsion.hover_state(log)` → dict of measured hover quantities (per-motor PWM, ESC throttle,
    normalized command, pack voltage, current, air density).
 4. `checks.run_all(log, spec, hover)` → `(findings, errors)`.
@@ -54,7 +55,7 @@ is absent — that is the normal way checks handle logs from other airframes/fir
 
 `plots.py` (matplotlib → SVG+PNG, for the PDF) and `iplots.py` (Plotly figure *specs* as plain
 dicts, serialized to JSON for the browser) are deliberate parallel implementations of the same
-seven figures. `iplots` imports shared colors and `_autotune_spans` from `plots`. Each builder
+eight figures. `iplots` imports shared colors and `_autotune_spans` from `plots`. Each builder
 returns a tuple and is registered in `ALL_FIGS` / `ALL_IPLOTS`; the generators swallow exceptions
 per figure, so a figure that can't be built is simply omitted. Adding a figure usually means
 touching both files to keep the web UI and PDF showing the same thing.

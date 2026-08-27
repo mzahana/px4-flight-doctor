@@ -48,6 +48,28 @@ button.go{margin-top:16px;width:100%;padding:12px;border:0;border-radius:10px;ba
 .toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 a.pdf{display:inline-block;padding:9px 18px;border-radius:10px;background:var(--crit);color:#fff;
   text-decoration:none;font-weight:700}
+/* --- dashboard --------------------------------------------------------- */
+.dash{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-top:14px}
+.stat{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+.stat .l{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+.stat .v{font-size:19px;font-weight:700;line-height:1.25;margin-top:2px}
+.stat .v .u{font-size:11.5px;font-weight:600;color:var(--muted);margin-left:3px}
+.stat .h{font-size:11px;color:var(--muted);margin-top:2px}
+.idline{color:var(--muted);font-size:12.5px;margin-top:4px}
+.modebar{display:flex;height:16px;border-radius:8px;overflow:hidden;margin-top:14px;border:1px solid var(--line)}
+.modebar div{height:100%}
+.modekeys{display:flex;flex-wrap:wrap;gap:10px;margin-top:6px;font-size:11.5px;color:var(--muted)}
+.modekeys span i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;font-style:normal}
+/* --- tabs -------------------------------------------------------------- */
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:18px 0 14px;border-bottom:1px solid var(--line)}
+.tabs button{border:1px solid transparent;border-bottom:0;background:none;color:var(--muted);
+  font:600 14px/1 system-ui,sans-serif;padding:10px 14px;border-radius:10px 10px 0 0;cursor:pointer}
+.tabs button:hover{color:var(--ink)}
+.tabs button.on{background:var(--card);border-color:var(--line);color:var(--accent)}
+.tabs button .n{display:inline-block;min-width:18px;padding:0 5px;margin-left:6px;border-radius:9px;
+  background:var(--line);color:var(--ink);font-size:11px;font-weight:700}
+.tabs button.on .n{background:var(--accent);color:var(--card)}
+.pane{display:none} .pane.on{display:block}
 .plotcard{padding:10px 14px}
 .plotcard .cap{color:var(--muted);font-size:12.5px;margin-top:2px}
 .plotdiv{width:100%;min-height:300px}
@@ -116,33 +138,55 @@ const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&qu
 const SEV={3:'CRITICAL',2:'WARNING',1:'INFO',0:'OK'};
 
 function render(j){
-  hidden=new Set();
-  const c=j.counts;
+  hidden=new Set(); drawn=new Set();
+  const c=j.counts, sm=j.summary||{items:[],modes:[],header:{}}, hd=sm.header||{};
+  const idbits=[hd.airframe,hd.firmware,hd.hardware,hd.airframe_id?'SYS_AUTOSTART '+hd.airframe_id:''].filter(Boolean);
+
+  // --- dashboard (always visible, above the tabs) ---
   let h='<div class="card"><div class="toolbar"><div><b>'+esc(j.meta.log)+'</b>'
     +(j.meta.mass_kg?' · '+j.meta.mass_kg+' kg':'')
-    +(j.meta.duration?' · '+Math.round(j.meta.duration)+' s airborne':'')+'</div>'
+    +(idbits.length?'<div class="idline">'+esc(idbits.join(' · '))+'</div>':'')+'</div>'
     +'<a class="pdf" href="/report/'+j.id+'/pdf">⬇ Download PDF</a></div>'
-    +'<div class="counts">'
-    +[3,2,1,0].map(s=>'<span class="chip c'+s+'" data-s="'+s+'" onclick="tog(this)">'
-      +(c[SEV[s]]||0)+' '+SEV[s]+'</span>').join('')
-    +'</div><div class="sub" style="margin:0">click a chip to show/hide that severity</div></div>';
+    +'<div class="dash">'
+    +sm.items.map(s=>'<div class="stat"><div class="l">'+esc(s.label)+'</div>'
+      +'<div class="v">'+esc(String(s.value))+(s.unit?'<span class="u">'+esc(s.unit)+'</span>':'')+'</div>'
+      +(s.hint?'<div class="h">'+esc(s.hint)+'</div>':'')+'</div>').join('')
+    +'</div>';
+  if(sm.modes&&sm.modes.length){
+    h+='<div class="modebar">'+sm.modes.map(m=>'<div style="width:'+m.pct+'%;background:'
+        +modeColor(m.name)+'" title="'+esc(m.name)+' — '+m.seconds+' s"></div>').join('')+'</div>'
+      +'<div class="modekeys">'+sm.modes.map(m=>'<span><i style="background:'+modeColor(m.name)+'"></i>'
+        +esc(m.name)+' '+m.pct+'%</span>').join('')+'</div>';
+  }
+  h+='</div>';
 
+  // --- tab bar ---
   const acts=j.findings.filter(f=>f.fixes.length&&f.severity>=2).sort((a,b)=>b.severity-a.severity);
+  const nplots=(j.plots||[]).length;
+  const tabs=[['actions','🔧 Actions',acts.length],['findings','🩺 Findings',j.findings.length],
+              ['plots','📈 Plots',nplots]];
+  if(j.errors.length) tabs.push(['errors','⚠️ Check errors',j.errors.length]);
+  const first=acts.length?'actions':'findings';
+  h+='<div class="tabs">'+tabs.map(([id,lbl,n])=>'<button data-tab="'+id+'"'
+      +(id===first?' class="on"':'')+' onclick="showTab(\''+id+'\')">'+lbl
+      +'<span class="n">'+n+'</span></button>').join('')+'</div>';
+
+  // --- panes ---
+  h+='<div class="pane'+(first==='actions'?' on':'')+'" id="pane-actions">';
   if(acts.length){
-    h+='<div class="card actions"><b>🔧 Recommended actions (highest priority first)</b><ol>';
+    h+='<div class="card actions"><b>Recommended actions (highest priority first)</b><ol>';
     for(const f of acts){ h+='<li><b>'+esc(f.title)+'</b>'
       +f.fixes.map(x=>'<div class="fix">→ '+esc(x)+'</div>').join('')+'</li>'; }
     h+='</ol></div>';
-  }
-  if(j.plots&&j.plots.length){
-    h+='<div class="cat">📈 Diagnostic plots <span style="font-weight:400;font-size:12px;color:var(--muted)">— drag to zoom, double-click to reset, scroll to zoom, click legend items to hide/show traces</span></div>';
-    for(const p of j.plots){
-      h+='<div class="card plotcard"><div class="plotdiv" id="plot-'+p.id+'"></div>'
-        +'<div class="cap">'+esc(p.caption)+'</div></div>';
-    }
-  }
-  const cats=[...new Set(j.findings.map(f=>f.category))];
-  for(const cat of cats){
+  } else h+='<div class="card">Nothing urgent — no warning or critical finding carries a concrete fix.</div>';
+  h+='</div>';
+
+  h+='<div class="pane'+(first==='findings'?' on':'')+'" id="pane-findings">'
+    +'<div class="card"><div class="counts">'
+    +[3,2,1,0].map(s=>'<span class="chip c'+s+'" data-s="'+s+'" onclick="tog(this)">'
+      +(c[SEV[s]]||0)+' '+SEV[s]+'</span>').join('')
+    +'</div><div class="sub" style="margin:0">click a chip to show/hide that severity</div></div>';
+  for(const cat of [...new Set(j.findings.map(f=>f.category))]){
     h+='<div class="cat">'+esc(cat)+'</div>';
     for(const f of j.findings.filter(x=>x.category===cat).sort((a,b)=>b.severity-a.severity)){
       h+='<div class="f s'+f.severity+'" data-s="'+f.severity+'">'
@@ -153,9 +197,48 @@ function render(j){
         +'</div>';
     }
   }
-  if(j.errors.length) h+='<div class="card err">Some checks failed: '+j.errors.map(esc).join('; ')+'</div>';
+  h+='</div>';
+
+  h+='<div class="pane" id="pane-plots">';
+  if(nplots){
+    h+='<div class="sub">drag to zoom, double-click to reset, scroll to zoom, click legend items to hide/show traces</div>';
+    for(const p of j.plots)
+      h+='<div class="card plotcard"><div class="plotdiv" id="plot-'+p.id+'"></div>'
+        +'<div class="cap">'+esc(p.caption)+'</div></div>';
+  } else h+='<div class="card">No plots could be built from this log.</div>';
+  h+='</div>';
+
+  if(j.errors.length)
+    h+='<div class="pane" id="pane-errors"><div class="card err">Some checks failed: '
+      +j.errors.map(esc).join('; ')+'</div></div>';
+
   $('out').innerHTML=h;
-  if(j.plots) for(const p of j.plots) drawPlot(j.id, p.id);
+  RESULT=j;
+  if(first==='plots') drawPane();
+}
+
+// stable-ish color per mode name, mirroring analyzer/plots.py MODE_COLORS
+const MODE_COLORS={MANUAL:'#9b59b6',STABILIZED:'#8e44ad',ACRO:'#e67e22',ALTCTL:'#16a085',
+  POSCTL:'#2980b9',POSITION_SLOW:'#5dade2',AUTO_MISSION:'#27ae60',AUTO_LOITER:'#1abc9c',
+  AUTO_RTL:'#f39c12',AUTO_TAKEOFF:'#58d68d',AUTO_LAND:'#af7ac5',OFFBOARD:'#c0392b',
+  DESCEND:'#7f8c8d',TERMINATION:'#922b21',ORBIT:'#d35400',PRECLAND:'#a569bd',
+  FOLLOW_TARGET:'#48c9b0',AUTO_VTOL_TAKEOFF:'#52be80'};
+const MODE_FALLBACK=['#7f8c8d','#34495e','#c39bd3','#5499c7'];
+function modeColor(n){ if(MODE_COLORS[n]) return MODE_COLORS[n];
+  let s=0; for(const ch of n) s+=ch.charCodeAt(0); return MODE_FALLBACK[s%MODE_FALLBACK.length]; }
+
+let RESULT=null, drawn=new Set();
+function showTab(id){
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.tab===id));
+  document.querySelectorAll('.pane').forEach(p=>p.classList.toggle('on',p.id==='pane-'+id));
+  if(id==='plots') drawPane();
+}
+function drawPane(){
+  if(!RESULT||!RESULT.plots) return;
+  for(const p of RESULT.plots){
+    if(drawn.has(p.id)){ const el=$('plot-'+p.id); if(el&&el.data) Plotly.Plots.resize(el); }
+    else { drawn.add(p.id); drawPlot(RESULT.id,p.id); }
+  }
 }
 
 const dark=matchMedia('(prefers-color-scheme: dark)').matches;

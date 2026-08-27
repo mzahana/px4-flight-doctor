@@ -16,19 +16,57 @@ def check_flight_summary(log, spec, hover):
     f.append(Finding(INFO, "Flight", f"{info.get('ver_hw','?')} | {dur}",
                      detail=f"SW: {info.get('ver_sw_branch','?')} {info.get('ver_sw','?')[:8]}  "
                             f"OS: {info.get('sys_os_name','?')}"))
+    spans = log.mode_spans()
+    if spans:
+        w = log.in_air_window()
+        air = [(max(a, w[0]), min(b, w[1]), n) for a, b, n in spans
+               if b > w[0] and a < w[1]] if w else []
+        seq = " -> ".join(f"{n} ({b-a:.0f} s)" for a, b, n in (air or spans))
+        f.append(Finding(INFO, "Flight", f"Flight modes: {seq}",
+                         detail="Timeline order of vehicle_status.nav_state; durations of the "
+                                "airborne portion. Plots shade these mode windows."))
     msgs = [m for m in log.ulog.logged_messages if m.log_level_str() in ("ERROR", "WARNING", "CRITICAL", "EMERGENCY")]
     for m in msgs[:10]:
         f.append(Finding(WARN, "Flight", f"log message [{m.log_level_str()}]: {m.message.strip()}"))
     return f
 
 
+def autotune_ran(log):
+    """True if an identification sequence (not just IDLE/INIT) is present in the log."""
+    d = log.get("autotune_attitude_control_status")
+    return d is not None and bool(np.any((d["state"] >= 2) & (d["state"] <= 14)))
+
+
 # --------------------------------------------------------------------------- #
 def check_autotune(log, spec, hover):
     d = log.get("autotune_attitude_control_status")
+    en = log.param("MC_AT_EN")
+    en_txt = ("MC_AT_EN=1 (autotune module enabled)" if en
+              else "MC_AT_EN=0 - the autotune module is disabled")
     if d is None:
-        return []
+        return [Finding(INFO, "Autotune", "No autotune in this log",
+                        detail=f"The autotune_attitude_control_status topic was never logged. {en_txt}. "
+                               "Gains in this flight are whatever was already saved on the vehicle.",
+                        doc="05_autotune.md")]
     f = []
     t, st = log.t(d), d["state"]
+    # states 2..13 are the actual identification sequence; IDLE/INIT alone means
+    # the module was running but no tune was ever commanded.
+    ran = autotune_ran(log)
+    if not ran:
+        states = ", ".join(sorted({AUTOTUNE_STATES.get(int(s), str(int(s))) for s in st}))
+        return [Finding(INFO, "Autotune", "No autotune was run in this flight",
+                        detail=f"The autotune module was active but never left {states}. {en_txt}.",
+                        doc="05_autotune.md")]
+    w = log.in_air_window()
+    m = (st >= 2) & (st <= 13)
+    t0, t1 = float(t[m][0]), float(t[m][-1])
+    axes = [nm for nm, code in (("roll", 3), ("pitch", 6), ("yaw", 9)) if np.any(st == code)]
+    f.append(Finding(INFO, "Autotune", "This log contains an autotune run",
+                     detail=f"Identification ran from t={t0:.0f} s to t={t1:.0f} s ({t1-t0:.0f} s), "
+                            f"axes: {', '.join(axes) if axes else 'none identified'}"
+                            + (f"; takeoff at t={w[0]:.0f} s" if w else ""),
+                     doc="05_autotune.md"))
     # state transition list
     trans, prev = [], None
     for i in range(len(st)):
@@ -478,7 +516,7 @@ def check_tracking(log, spec, hover):
     m = (ta > w[0] + 2) & (ta < w[1] - 1)
     if m.sum() < 100:
         return f
-    at_active = log.has("autotune_attitude_control_status")
+    at_active = autotune_ran(log)
     rms = {}
     for i, (ax, key) in enumerate((("roll", "roll"), ("pitch", "pitch"), ("yaw", "yaw"))):
         sp = np.interp(ta[m], tr, rs[key])

@@ -16,6 +16,7 @@ MOTOR_COLORS = ["#2471a3", "#c0392b", "#1e8449", "#b9770e"]
 plt.rcParams.update({
     "figure.dpi": 110, "savefig.bbox": "tight",
     "font.size": 9, "axes.titlesize": 10, "axes.titleweight": "bold",
+    "axes.titlepad": 22,   # room for the two staggered rows of flight-mode labels
     "axes.spines.top": False, "axes.spines.right": False,
     "axes.grid": True, "grid.alpha": 0.25, "legend.framealpha": 0.85,
     "figure.constrained_layout.use": True,
@@ -47,6 +48,53 @@ def _autotune_spans(log):
     if cur in label:
         spans.append((start, t[-1], label[cur]))
     return [(float(a), float(b), l) for a, b, l in spans]
+
+
+# Flight-mode shading -------------------------------------------------------
+MODE_COLORS = {
+    "MANUAL": "#9b59b6", "STABILIZED": "#8e44ad", "ACRO": "#e67e22",
+    "ALTCTL": "#16a085", "POSCTL": "#2980b9", "POSITION_SLOW": "#5dade2",
+    "AUTO_MISSION": "#27ae60", "AUTO_LOITER": "#1abc9c", "AUTO_RTL": "#f39c12",
+    "AUTO_TAKEOFF": "#58d68d", "AUTO_LAND": "#af7ac5", "OFFBOARD": "#c0392b",
+    "DESCEND": "#7f8c8d", "TERMINATION": "#922b21", "ORBIT": "#d35400",
+    "PRECLAND": "#a569bd", "FOLLOW_TARGET": "#48c9b0", "AUTO_VTOL_TAKEOFF": "#52be80",
+}
+_MODE_FALLBACK = ["#7f8c8d", "#34495e", "#c39bd3", "#5499c7"]
+
+
+def mode_color(name):
+    """Stable color per mode name (unknown modes hash into a fallback palette)."""
+    if name in MODE_COLORS:
+        return MODE_COLORS[name]
+    return _MODE_FALLBACK[sum(map(ord, name)) % len(_MODE_FALLBACK)]
+
+
+def _shade_modes(ax, spans, label=False):
+    """Tint the background by flight mode; label above the axes on the top plot.
+
+    Labels are staggered over two rows and dropped for slivers too narrow to hold
+    text, so a mode-hopping flight does not turn the strip into overlapping mush.
+    """
+    if not spans:
+        return
+    total = float(spans[-1][1] - spans[0][0]) or 1.0
+    row, prev_end = 0, -np.inf
+    for t0, t1, name in spans:
+        c = mode_color(name)
+        ax.axvspan(t0, t1, color=c, alpha=0.09, zorder=0)
+        ax.axvline(t0, color=c, lw=0.8, alpha=0.45, zorder=0)
+        if not label:
+            continue
+        # a label needs roughly this much x-room; below it, skip rather than overlap
+        need = 0.011 * total * max(len(name), 4)
+        if (t1 - t0) < min(need, 0.05 * total):
+            continue
+        mid = (t0 + t1) / 2
+        row = 0 if mid - prev_end > 0.10 * total else 1 - row
+        ax.text(mid, 1.015 + 0.055 * row, name, transform=ax.get_xaxis_transform(),
+                ha="center", va="bottom", fontsize=7, color=c, fontweight="bold",
+                clip_on=False)
+        prev_end = mid
 
 
 def _shade_autotune(ax, spans, y=0.97):
@@ -85,6 +133,8 @@ def fig_overview(log, spec):
     a1.set_ylabel("altitude [m]")
     a1.set_title("Flight overview")
     spans = _autotune_spans(log)
+    modes = log.mode_spans()
+    _shade_modes(a1, modes, label=True)
     _shade_autotune(a1, spans)
     _flight_markers(a1, log)
     a1.legend(loc="upper left", fontsize=8)
@@ -104,10 +154,12 @@ def fig_overview(log, spec):
         a3.plot(*_ds(tb, b["current_a"]), color=C["purple"], lw=1.0, alpha=0.8, label="current")
         a3.set_ylabel("current [A]", color=C["purple"])
         a3.grid(False)
+        _shade_modes(a2, modes)
         _shade_autotune(a2, spans)
     a2.set_xlabel("time [s]")
     return ("overview", "Flight overview",
-            "Altitude with autotune phases shaded; battery cell voltage and pack current below.",
+            "Altitude with flight-mode windows tinted (mode name above the plot) and autotune "
+            "phases shaded in amber; battery cell voltage and pack current below.",
             *_render(fig))
 
 
@@ -147,6 +199,7 @@ def fig_motors(log, spec):
                 ha="right", va="bottom")
         ax.axhline(0.5, color=C["green"], ls=":", lw=0.9)
         ax.text(t[0], 0.5, " ideal hover ~0.5", color=C["green"], fontsize=7.5, va="bottom")
+    _shade_modes(ax, log.mode_spans(), label=True)
     _shade_autotune(ax, _autotune_spans(log), y=0.12)
     _flight_markers(ax, log)
     ax.set_ylim(0, 1.1)
@@ -168,11 +221,13 @@ def fig_rates(log, spec):
     fig, axes = plt.subplots(3, 1, figsize=(9, 5.6), sharex=True)
     ta, tr = log.t(av), log.t(rs)
     spans = _autotune_spans(log)
+    modes = log.mode_spans()
     for i, (ax, name) in enumerate(zip(axes, ("roll", "pitch", "yaw"))):
         ax.plot(*_ds(tr, np.degrees(rs[name])), color=C["grey"], lw=0.9, label="setpoint")
         ax.plot(*_ds(ta, np.degrees(av[f"xyz[{i}]"])), color=MOTOR_COLORS[i], lw=0.9,
                 alpha=0.85, label="actual")
         ax.set_ylabel(f"{name} [deg/s]")
+        _shade_modes(ax, modes, label=(i == 0))
         _shade_autotune(ax, spans)
         if i == 0:
             ax.set_title("Rate tracking: setpoint vs actual")
@@ -196,9 +251,9 @@ def fig_vibration(log, spec):
     if m.sum() < 512:
         return None
     dt = float(np.median(np.diff(t[m])))
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(9, 3.4))
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(10, 3.6))
     for src, ax, unit in (("accelerometer_m_s2", a1, "m/s²"), ("gyro_rad", a2, "rad/s")):
-        peak_f, peak_v = 0, 0
+        peak_f, peak_v, top = 0, 0, 0
         for i, lbl in enumerate("xyz"):
             x = sc[f"{src}[{i}]"][m].astype(float)
             x -= x.mean()
@@ -207,24 +262,33 @@ def fig_vibration(log, spec):
             sel = fr > 3
             ax.plot(fr[sel], P[sel], lw=0.9, label=lbl, color=MOTOR_COLORS[i])
             j = np.argmax(P[sel])
+            top = max(top, float(P[sel][j]))
             if P[sel][j] > peak_v:
                 peak_v, peak_f = P[sel][j], fr[sel][j]
+        # headroom so the legend never lands on a trace or on the peak callout
+        ax.set_ylim(0, top * 1.45)
+        nyq = 0.5 / dt
+        right = peak_f > 0.55 * nyq          # keep the callout inside the axes
         ax.annotate(f"dominant {peak_f:.0f} Hz", (peak_f, peak_v),
-                    xytext=(12, 4), textcoords="offset points", fontsize=8.5,
+                    xytext=(-14 if right else 14, 10), textcoords="offset points",
+                    fontsize=8.5, ha="right" if right else "left",
                     color=C["red"], fontweight="bold",
                     arrowprops=dict(arrowstyle="->", color=C["red"]))
-        nyq = 0.5 / dt
         ax.axvline(nyq, color=C["grey"], ls="--", lw=0.9)
-        ax.text(nyq, ax.get_ylim()[1] * 0.95, "Nyquist ", ha="right", fontsize=7.5, color=C["grey"])
+        # vertical labels sit along the bottom, clear of the legend box
+        ax.text(nyq, 0.04, "Nyquist ", transform=ax.get_xaxis_transform(), rotation=90,
+                rotation_mode="anchor", ha="left", va="top", fontsize=7.5, color=C["grey"])
         cutoff = log.param("IMU_GYRO_CUTOFF")
         if src.startswith("gyro") and cutoff:
             ax.axvline(cutoff, color=C["green"], ls=":", lw=0.9)
-            ax.text(cutoff, ax.get_ylim()[1] * 0.85, f" LPF {cutoff:.0f} Hz",
+            ax.text(cutoff, 0.04, f"LPF {cutoff:.0f} Hz ", transform=ax.get_xaxis_transform(),
+                    rotation=90, rotation_mode="anchor", ha="left", va="bottom",
                     fontsize=7.5, color=C["green"])
         ax.set_xlabel("frequency [Hz]")
         ax.set_ylabel(f"amplitude [{unit}]")
         ax.set_title("Accelerometer spectrum" if ax is a1 else "Gyro spectrum")
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=8, ncol=3, loc="upper right", framealpha=0.95,
+                  borderpad=0.3, columnspacing=1.0, handlelength=1.2)
     return ("vibration", "Vibration spectrum",
             "In-flight FFT of raw IMU data. Sharp peaks are mechanical resonances or "
             "prop-order vibration; a notch filter should be placed on the dominant peak. "
@@ -240,11 +304,13 @@ def fig_autotune(log, spec):
     t = log.t(d)
     fig, (a1, a2) = plt.subplots(2, 1, figsize=(9, 5), sharex=True)
     spans = _autotune_spans(log)
+    modes = log.mode_spans()
     cv = np.stack([d[f"coeff_var[{i}]"] for i in range(5)])
     worst = np.max(cv, axis=0)
     a1.semilogy(*_ds(t, worst), color=C["blue"], lw=1.2, label="worst coefficient variance")
     a1.axhline(50, color=C["red"], ls="--", lw=1)
     a1.text(t[0], 50, " convergence threshold (50)", color=C["red"], fontsize=8, va="bottom")
+    _shade_modes(a1, modes, label=True)
     _shade_autotune(a1, spans)
     for t0, t1, lbl in spans:
         i = np.searchsorted(t, t1) - 1
@@ -257,6 +323,7 @@ def fig_autotune(log, spec):
     a2.plot(*_ds(t, d["kc"]), color=C["green"], lw=1.2, label="rate gain K")
     a2.plot(*_ds(t, d["kd"] * 10), color=C["purple"], lw=1.0, label="rate D x10")
     a2.plot(*_ds(t, d["att_p"] / 10), color=C["orange"], lw=1.0, label="attitude P / 10")
+    _shade_modes(a2, modes)
     _shade_autotune(a2, spans)
     for t0, t1, lbl in spans:
         a2.axvline(t1, color=C["grey"], ls=":", lw=0.8)
@@ -276,34 +343,71 @@ def fig_autotune(log, spec):
 
 
 
+def _spectrogram(t, sig, target_cols=220, min_seg=256, max_seg=2048):
+    """Plain-numpy STFT of one signal.
+
+    Returns (times, freqs, P) where P is power spectral density (unit²/Hz) with
+    one column per window. Kept dependency-free (no scipy) on purpose.
+    """
+    dt = float(np.median(np.diff(t)))
+    fs = 1.0 / dt
+    n = int(2 ** round(np.log2(max(len(sig) / max(target_cols, 1) * 2, min_seg))))
+    nseg = int(min(max(n, min_seg), max_seg, len(sig)))
+    if nseg < min_seg:
+        return None
+    hop = max(nseg // 2, 1)
+    win = np.hanning(nseg)
+    norm = fs * (win ** 2).sum()          # PSD scaling for a windowed segment
+    starts = range(0, len(sig) - nseg + 1, hop)
+    cols, times = [], []
+    for a in starts:
+        seg = sig[a:a + nseg]
+        seg = seg - seg.mean()
+        P = np.abs(np.fft.rfft(seg * win)) ** 2 / norm
+        P[1:-1] *= 2                       # one-sided
+        cols.append(P)
+        times.append(float(t[a + nseg // 2]))
+    if not cols:
+        return None
+    return np.array(times), np.fft.rfftfreq(nseg, dt), np.array(cols).T
+
+
 # --------------------------------------------------------------------------- #
 def fig_mag_power(log, spec):
     from .checks import _mag_power_data
     d = _mag_power_data(log)
     if d is None or "I" not in d:
         return None
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(9, 3.4))
+    # stacked, not side by side: the twin current axis on the right of the time plot
+    # used to run straight into the scatter's |B| label
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(9, 6.0),
+                                 gridspec_kw=dict(height_ratios=[1.15, 1]))
     t, B, I = d["t"], d["B"] * 1000, d["I"]   # B in mGauss
-    a1.plot(*_ds(t, B), color=C["blue"], lw=1.1, label="|B| [mG]")
+    l1, = a1.plot(*_ds(t, B), color=C["blue"], lw=1.1, label="|B| [mG]")
     a1.set_xlabel("time [s]"); a1.set_ylabel("|B| [mG]", color=C["blue"])
     a1.set_title("Magnetic field vs power draw")
     ax2 = a1.twinx()
-    ax2.plot(*_ds(t, I), color=C["purple"], lw=1.0, alpha=0.8, label="current [A]")
+    l2, = ax2.plot(*_ds(t, I), color=C["purple"], lw=1.0, alpha=0.8, label="current [A]")
     ax2.set_ylabel("current [A]", color=C["purple"]); ax2.grid(False)
+    _shade_modes(a1, log.mode_spans(), label=True)
     _shade_autotune(a1, _autotune_spans(log), y=0.1)
+    # one legend for both axes instead of two boxes fighting over the same corner
+    a1.legend([l1, l2], [l1.get_label(), l2.get_label()], fontsize=8,
+              loc="upper left", ncol=2, framealpha=0.9)
     r = float(np.corrcoef(B, I)[0, 1])
     p = np.polyfit(I, B, 1)
-    a2.plot(I, B, ".", ms=2, color=C["grey"], alpha=0.4)
+    a2.plot(I, B, ".", ms=2, color=C["grey"], alpha=0.4, label="samples")
     xs = np.linspace(I.min(), I.max(), 20)
     a2.plot(xs, np.polyval(p, xs), color=C["red"], lw=1.6,
             label=f"fit {p[0]:+.2f} mG/A")
-    a2.annotate(f"corr = {r:+.2f}", (0.05, 0.92), xycoords="axes fraction",
+    a2.annotate(f"corr = {r:+.2f}", (0.02, 0.90), xycoords="axes fraction",
                 fontsize=10, fontweight="bold",
                 color=C["red"] if abs(r) > 0.5 else C["green"])
     a2.set_xlabel("battery current [A]"); a2.set_ylabel("|B| [mG]")
-    a2.set_title("|B| vs current"); a2.legend(fontsize=8, loc="lower right")
+    a2.set_title("|B| vs current")
+    a2.legend(fontsize=8, loc="lower right", framealpha=0.9)
     return ("magpower", "Magnetic field vs power",
-            "Left: field magnitude and battery current over the flight. Right: the same "
+            "Top: field magnitude and battery current over the flight. Bottom: the same "
             "data as a scatter with linear fit - a strong slope/correlation means motor "
             "current is bending the compass reading (move mag / twist power leads).",
             *_render(fig))
@@ -340,8 +444,59 @@ def fig_batt_ri(log, spec):
             "the per-cell value for accurate state-of-charge.",
             *_render(fig))
 
-ALL_FIGS = [fig_overview, fig_motors, fig_rates, fig_vibration, fig_autotune,
-            fig_mag_power, fig_batt_ri]
+# --------------------------------------------------------------------------- #
+def fig_vibe_spectrogram(log, spec):
+    sc = log.get("sensor_combined")
+    if sc is None:
+        return None
+    t = log.t(sc)
+    if len(t) < 4096:
+        return None
+    axis_names = ("roll", "pitch", "yaw")
+    fig, axes = plt.subplots(3, 1, figsize=(9, 7.2), sharex=True, sharey=True)
+    cutoff = log.param("IMU_GYRO_CUTOFF")
+    w = log.in_air_window()
+    mesh = None
+    for i, (ax, name) in enumerate(zip(axes, axis_names)):
+        r = _spectrogram(t, sc[f"gyro_rad[{i}]"].astype(float))
+        if r is None:
+            plt.close(fig)
+            return None
+        tt, fr, P = r
+        sel = fr > 2
+        db = 10 * np.log10(P[sel] + 1e-12)
+        # common scale across axes: absolute dB is what matters, not per-axis contrast
+        mesh = ax.pcolormesh(tt, fr[sel], db, cmap="magma", shading="auto",
+                             vmin=np.percentile(db, 40), vmax=np.percentile(db, 99.9))
+        ax.set_ylabel(f"{name} gyro\nfreq [Hz]")
+        if cutoff:
+            ax.axhline(cutoff, color="#7fd3ff", ls=":", lw=1.0)
+        if w:
+            for x in w:
+                ax.axvline(x, color="w", ls=":", lw=1.0, alpha=0.7)
+    if cutoff:
+        axes[0].text(0.995, cutoff, f"gyro LPF {cutoff:.0f} Hz ", color="#7fd3ff",
+                     transform=axes[0].get_yaxis_transform(), ha="right", va="bottom",
+                     fontsize=7.5, fontweight="bold")
+    if w:
+        axes[0].text(w[0], 0.98, " takeoff", transform=axes[0].get_xaxis_transform(),
+                     color="w", fontsize=7.5, va="top")
+    axes[0].set_title("Gyro spectrogram - vibration energy vs time")
+    axes[-1].set_xlabel("time [s]")
+    fig.colorbar(mesh, ax=list(axes), label="PSD [dB, (rad/s)²/Hz]", pad=0.015,
+                 aspect=40)
+    return ("spectrogram", "Vibration spectrogram",
+            "Gyro power spectral density over the whole log, one row per body axis. "
+            "Horizontal bright lines are steady resonances; lines that sweep up and down "
+            "with throttle are prop/motor order (rpm-driven) and are the ones a notch or "
+            "dynamic notch should track. Broadband brightening after a point in time "
+            "usually means something came loose. Energy above the gyro LPF line is what "
+            "the filter is already removing.",
+            *_render(fig))
+
+
+ALL_FIGS = [fig_overview, fig_motors, fig_rates, fig_vibration, fig_vibe_spectrogram,
+            fig_autotune, fig_mag_power, fig_batt_ri]
 
 
 def generate_all(log, spec):
