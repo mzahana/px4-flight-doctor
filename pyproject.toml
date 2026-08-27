@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "px4-flight-doctor"
+version = "0.1.0"
+description = "PX4 .ulg flight-log analyzer that reconciles logs against your drone's real physical specs (mass, motor bench data) and produces prioritized issue/fix reports - CLI, web UI with interactive plots, and PDF export."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Mohamed Ashraf" }]
+keywords = ["px4", "ulog", "drone", "flight-log", "autotune", "diagnostics"]
+dependencies = [
+    "pyulog>=1.0",
+    "numpy>=1.22",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "flask>=3.0",
+    "reportlab>=4.0",
+    "matplotlib>=3.7",
+]
+
+[project.scripts]
+px4doctor = "analyzer.cli:main"
+px4doctor-web = "analyzer.webapp:main"
+
+[tool.setuptools]
+packages = ["analyzer"]

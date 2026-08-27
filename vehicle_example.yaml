@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# Vehicle specification for px4-flight-doctor
+# Copy this file, edit the numbers for YOUR drone, then run:
+#   .venv/bin/python analyze.py mylog.ulg --vehicle my_drone.yaml --report
+# Every field is optional - the more you fill in, the deeper the analysis.
+# This example is pre-filled for a Holybro X500 V2 with Jetson Orin NX payload.
+# ---------------------------------------------------------------------------
+
+mass_kg: 2.2                 # measured takeoff weight, battery included
+n_motors: 4
+
+battery_cells: 4             # 4 = 4S
+battery_capacity_mah: 5200
+
+# From the propeller datasheet ("thrust limitation")
+prop_thrust_limit_g: 1200    # T1045II is rated 1.2 kg per prop
+# From the motor datasheet
+motor_peak_current_a: 17     # AIR2216II peak current (180 s)
+
+# Outside air temperature during the flight (deg C).
+# Important: without this, air density falls back to the autopilot's estimate,
+# which uses the barometer die temperature (self-heated, reads 15-25 C too hot).
+oat_c: 42
+
+# Motor bench-test table from the manufacturer or a thrust stand.
+# throttle_pct = ESC throttle percent, thrust_g = grams per single motor.
+# current_a is optional but enables hover-current prediction.
+motor_bench:
+  voltage: 16.0              # the voltage the table was measured at
+  points:
+    - {throttle_pct: 30,  thrust_g: 210,  current_a: 1.44}
+    - {throttle_pct: 35,  thrust_g: 259,  current_a: 1.87}
+    - {throttle_pct: 40,  thrust_g: 309,  current_a: 2.29}
+    - {throttle_pct: 45,  thrust_g: 373,  current_a: 2.86}
+    - {throttle_pct: 50,  thrust_g: 447,  current_a: 3.60}
+    - {throttle_pct: 55,  thrust_g: 536,  current_a: 4.53}
+    - {throttle_pct: 60,  thrust_g: 628,  current_a: 5.61}
+    - {throttle_pct: 65,  thrust_g: 729,  current_a: 6.78}
+    - {throttle_pct: 70,  thrust_g: 814,  current_a: 7.92}
+    - {throttle_pct: 75,  thrust_g: 906,  current_a: 9.20}
+    - {throttle_pct: 80,  thrust_g: 993,  current_a: 10.59}
+    - {throttle_pct: 85,  thrust_g: 1087, current_a: 12.11}
+    - {throttle_pct: 90,  thrust_g: 1191, current_a: 13.81}
+    - {throttle_pct: 95,  thrust_g: 1289, current_a: 15.68}
+    - {throttle_pct: 100, thrust_g: 1332, current_a: 16.37}
+
+notes: "X500 V2, AIR2216II KV920, T1045II props, BLHeli-S 20A, Orin NX + SIYI A8 mini"

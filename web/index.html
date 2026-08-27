@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PX4 Flight Doctor</title>
+<style>
+:root{
+  --bg:#f4f6f8; --card:#ffffff; --ink:#1c2733; --muted:#66707a; --line:#e2e7ec;
+  --crit:#c0392b; --warn:#b9770e; --info:#2471a3; --ok:#1e8449; --accent:#1a5276;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#12181f; --card:#1b232c; --ink:#e8edf2; --muted:#93a0ac; --line:#2b3641;
+         --crit:#e57368; --warn:#e3a63b; --info:#5dade2; --ok:#58c98a; --accent:#7fb3d5; }
+}
+*{box-sizing:border-box} body{margin:0;font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif;
+  background:var(--bg);color:var(--ink)}
+.wrap{max-width:980px;margin:0 auto;padding:24px 16px 80px}
+h1{font-size:22px;margin:0 0 4px} .sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+label{display:block;font-size:12px;color:var(--muted);margin:10px 0 3px}
+input[type=number],input[type=file]{width:100%;padding:8px;border:1px solid var(--line);
+  border-radius:8px;background:var(--bg);color:var(--ink)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0 16px}
+.drop{border:2px dashed var(--line);border-radius:12px;padding:26px;text-align:center;
+  color:var(--muted);cursor:pointer;transition:.15s}
+.drop.hover,.drop:hover{border-color:var(--accent);color:var(--accent)}
+.drop.has{border-style:solid;border-color:var(--ok);color:var(--ok)}
+button.go{margin-top:16px;width:100%;padding:12px;border:0;border-radius:10px;background:var(--accent);
+  color:#fff;font-size:16px;font-weight:600;cursor:pointer} button.go:disabled{opacity:.5;cursor:default}
+.counts{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 14px}
+.chip{padding:6px 14px;border-radius:20px;color:#fff;font-weight:700;font-size:13px;cursor:pointer;opacity:.92}
+.chip.off{opacity:.30}
+.c3{background:var(--crit)} .c2{background:var(--warn)} .c1{background:var(--info)} .c0{background:var(--ok)}
+.cat{margin:22px 0 8px;font-size:17px;font-weight:700;color:var(--accent);
+  border-bottom:1px solid var(--line);padding-bottom:4px}
+.f{border-left:4px solid var(--line);padding:8px 12px;margin:8px 0;background:var(--card);
+  border-radius:0 10px 10px 0;border-top:1px solid var(--line);border-right:1px solid var(--line);
+  border-bottom:1px solid var(--line)}
+.f.s3{border-left-color:var(--crit)} .f.s2{border-left-color:var(--warn)}
+.f.s1{border-left-color:var(--info)} .f.s0{border-left-color:var(--ok)}
+.f .t{font-weight:600} .f .t .tag{font-size:11px;font-weight:800;margin-right:8px}
+.s3 .tag{color:var(--crit)} .s2 .tag{color:var(--warn)} .s1 .tag{color:var(--info)} .s0 .tag{color:var(--ok)}
+.f .d{color:var(--muted);font-size:13px;white-space:pre-wrap;margin-top:3px}
+.f .fix{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--info);margin-top:3px}
+.f .doc a{font-size:12px;color:var(--muted)}
+.actions ol{margin:6px 0 0 18px;padding:0} .actions li{margin:7px 0}
+.toolbar{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+a.pdf{display:inline-block;padding:9px 18px;border-radius:10px;background:var(--crit);color:#fff;
+  text-decoration:none;font-weight:700}
+.plotcard{padding:10px 14px}
+.plotcard .cap{color:var(--muted);font-size:12.5px;margin-top:2px}
+.plotdiv{width:100%;min-height:300px}
+.spin{display:none;text-align:center;color:var(--muted);padding:20px}
+.err{color:var(--crit);font-weight:600}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);
+  max-width:760px;width:90%;max-height:80vh;overflow:auto;padding:22px}
+dialog pre{white-space:pre-wrap;font:13px/1.5 ui-monospace,Consolas,monospace}
+::backdrop{background:rgba(0,0,0,.5)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🚁 PX4 Flight Doctor</h1>
+  <div class="sub">Upload a .ulg flight log, add your drone's real measurements, get a full diagnosis.</div>
+
+  <div class="card" id="form">
+    <div class="drop" id="drop">Drop a <b>.ulg</b> log here or click to choose
+      <input type="file" id="log" accept=".ulg,.ulog" hidden></div>
+    <div class="grid">
+      <div><label>Takeoff mass (kg)</label><input type="number" step="0.01" id="mass" placeholder="e.g. 2.2"></div>
+      <div><label>Outside air temp (°C)</label><input type="number" step="1" id="oat" placeholder="e.g. 35"></div>
+      <div><label>Battery cells (S)</label><input type="number" step="1" id="cells" placeholder="e.g. 4"></div>
+      <div><label>Capacity (mAh)</label><input type="number" step="100" id="capacity" placeholder="e.g. 5200"></div>
+    </div>
+    <label>Vehicle spec YAML (optional — enables bench-table physics; see vehicle_example.yaml)</label>
+    <input type="file" id="vehicle" accept=".yaml,.yml">
+    <button class="go" id="go" disabled>Analyze flight</button>
+  </div>
+
+  <div class="spin" id="spin">⏳ Parsing and analyzing…</div>
+  <div id="out"></div>
+</div>
+
+<dialog id="docdlg"><pre id="doctext"></pre></dialog>
+
+<script src="/asset/plotly.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const drop=$('drop'), logIn=$('log'), go=$('go');
+let hidden=new Set();
+drop.onclick=()=>logIn.click();
+['dragover','dragenter'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('hover')}));
+['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('hover')}));
+drop.addEventListener('drop',ev=>{logIn.files=ev.dataTransfer.files;picked()});
+logIn.onchange=picked;
+function picked(){ if(logIn.files.length){drop.classList.add('has');
+  drop.innerHTML='📄 '+logIn.files[0].name; go.disabled=false;} }
+
+go.onclick=async()=>{
+  const fd=new FormData();
+  fd.append('log',logIn.files[0]);
+  if($('vehicle').files.length) fd.append('vehicle',$('vehicle').files[0]);
+  for(const k of ['mass','oat','cells','capacity']) if($(k).value) fd.append(k,$(k).value);
+  $('spin').style.display='block'; $('out').innerHTML=''; go.disabled=true;
+  try{
+    const r=await fetch('/analyze',{method:'POST',body:fd});
+    const j=await r.json();
+    if(!r.ok) throw new Error(j.error||r.statusText);
+    render(j);
+  }catch(e){ $('out').innerHTML='<div class="card err">'+esc(e.message)+'</div>'; }
+  $('spin').style.display='none'; go.disabled=false;
+};
+
+const esc=s=>s.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const SEV={3:'CRITICAL',2:'WARNING',1:'INFO',0:'OK'};
+
+function render(j){
+  hidden=new Set();
+  const c=j.counts;
+  let h='<div class="card"><div class="toolbar"><div><b>'+esc(j.meta.log)+'</b>'
+    +(j.meta.mass_kg?' · '+j.meta.mass_kg+' kg':'')
+    +(j.meta.duration?' · '+Math.round(j.meta.duration)+' s airborne':'')+'</div>'
+    +'<a class="pdf" href="/report/'+j.id+'/pdf">⬇ Download PDF</a></div>'
+    +'<div class="counts">'
+    +[3,2,1,0].map(s=>'<span class="chip c'+s+'" data-s="'+s+'" onclick="tog(this)">'
+      +(c[SEV[s]]||0)+' '+SEV[s]+'</span>').join('')
+    +'</div><div class="sub" style="margin:0">click a chip to show/hide that severity</div></div>';
+
+  const acts=j.findings.filter(f=>f.fixes.length&&f.severity>=2).sort((a,b)=>b.severity-a.severity);
+  if(acts.length){
+    h+='<div class="card actions"><b>🔧 Recommended actions (highest priority first)</b><ol>';
+    for(const f of acts){ h+='<li><b>'+esc(f.title)+'</b>'
+      +f.fixes.map(x=>'<div class="fix">→ '+esc(x)+'</div>').join('')+'</li>'; }
+    h+='</ol></div>';
+  }
+  if(j.plots&&j.plots.length){
+    h+='<div class="cat">📈 Diagnostic plots <span style="font-weight:400;font-size:12px;color:var(--muted)">— drag to zoom, double-click to reset, scroll to zoom, click legend items to hide/show traces</span></div>';
+    for(const p of j.plots){
+      h+='<div class="card plotcard"><div class="plotdiv" id="plot-'+p.id+'"></div>'
+        +'<div class="cap">'+esc(p.caption)+'</div></div>';
+    }
+  }
+  const cats=[...new Set(j.findings.map(f=>f.category))];
+  for(const cat of cats){
+    h+='<div class="cat">'+esc(cat)+'</div>';
+    for(const f of j.findings.filter(x=>x.category===cat).sort((a,b)=>b.severity-a.severity)){
+      h+='<div class="f s'+f.severity+'" data-s="'+f.severity+'">'
+        +'<div class="t"><span class="tag">'+SEV[f.severity]+'</span>'+esc(f.title)+'</div>'
+        +(f.detail?'<div class="d">'+esc(f.detail)+'</div>':'')
+        +f.fixes.map(x=>'<div class="fix">→ '+esc(x)+'</div>').join('')
+        +(f.doc?'<div class="doc"><a href="#" onclick="showDoc(\''+f.doc+'\');return false">📖 background: '+f.doc+'</a></div>':'')
+        +'</div>';
+    }
+  }
+  if(j.errors.length) h+='<div class="card err">Some checks failed: '+j.errors.map(esc).join('; ')+'</div>';
+  $('out').innerHTML=h;
+  if(j.plots) for(const p of j.plots) drawPlot(j.id, p.id);
+}
+
+const dark=matchMedia('(prefers-color-scheme: dark)').matches;
+async function drawPlot(rid,pid){
+  const el=$('plot-'+pid);
+  if(!el) return;
+  try{
+    const spec=await (await fetch('/report/'+rid+'/plotly/'+pid+'.json')).json();
+    const lay=spec.layout;
+    lay.paper_bgcolor='rgba(0,0,0,0)'; lay.plot_bgcolor='rgba(0,0,0,0)';
+    lay.font=Object.assign(lay.font||{},{color:dark?'#e8edf2':'#1c2733'});
+    const grid=dark?'rgba(255,255,255,.12)':'rgba(0,0,0,.10)';
+    for(const k in lay) if(k.startsWith('xaxis')||k.startsWith('yaxis'))
+      Object.assign(lay[k],{gridcolor:grid,zerolinecolor:grid});
+    lay.autosize=true;
+    Plotly.newPlot(el,spec.data,lay,{responsive:true,displaylogo:false,scrollZoom:true,
+      modeBarButtonsToRemove:['lasso2d','select2d','autoScale2d']});
+  }catch(e){ el.innerHTML='<span class="err">plot failed: '+esc(e.message)+'</span>'; }
+}
+function tog(el){
+  const s=el.dataset.s;
+  if(hidden.has(s)){hidden.delete(s);el.classList.remove('off')} else {hidden.add(s);el.classList.add('off')}
+  document.querySelectorAll('.f').forEach(d=>{
+    d.style.display=hidden.has(d.dataset.s)?'none':'';
+  });
+}
+async function showDoc(name){
+  const r=await fetch('/docs/'+name);
+  $('doctext').textContent=await r.text();
+  $('docdlg').showModal();
+}
+$('docdlg').onclick=e=>{if(e.target.id==='docdlg')$('docdlg').close()};
+</script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# --- Editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+
+# --- Flight data and generated reports stay local ---
+*.ulg
+*.ulog
+*.px4log
+*_report.md
+*_report.pdf
+# ...but the shipped documentation is not a generated report
+!docs/*.md
