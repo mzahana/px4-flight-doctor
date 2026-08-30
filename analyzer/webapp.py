@@ -119,7 +119,8 @@ def report_pdf(rid):
     r = RESULTS.get(rid)
     if not r:
         abort(404)
-    pdf = build_pdf(r["findings"], r["errors"], r["meta"], r.get("plots"))
+    pdf = build_pdf(r["findings"], r["errors"], r["meta"], r.get("plots"),
+                    r.get("summary"))
     name = os.path.splitext(r["meta"]["log"])[0] + "_report.pdf"
     return send_file(io.BytesIO(pdf), mimetype="application/pdf",
                      as_attachment=True, download_name=name)

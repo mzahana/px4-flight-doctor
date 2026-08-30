@@ -65,3 +65,18 @@ but the vehicle really hovers at 0.7, every altitude-mode engagement starts
 with a sag until the integrator catches up. Read the converged value of
 `hover_thrust_estimate` from a log and set it. Re-measure after **any**
 change to THR_MDL_FAC, PWM range, mass, or props — they all move it.
+
+px4-flight-doctor reports the estimate on every log (median, 1σ, settled
+value, and the fraction of samples the estimator marked valid) and plots it
+against the configured value, so the number is visible even when the two
+agree. It also cross-checks the estimate against the hover throttle predicted
+from the bench table (see [02_propulsion_math.md](02_propulsion_math.md)) —
+these are independent measurements of the same quantity, so a large gap points
+at the assumed mass, the bench table, or worn props. Note the two live in
+slightly different units: the estimator works in *normalized thrust command*
+(post THR_MDL_FAC and battery scaling), the bench prediction in raw ESC
+throttle, so a non-zero `THR_MDL_FAC` offsets them even on a healthy vehicle.
+
+The estimator only runs while the multicopter position controller is active,
+so a log flown entirely in MANUAL/STABILIZED/ACRO contains no estimate at
+all.

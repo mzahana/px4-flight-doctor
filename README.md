@@ -53,13 +53,21 @@ reset, click legend entries to hide/show individual traces. The
 **Download PDF** button exports a structured PDF with static versions of the
 same figures embedded.
 
-Plots: flight overview (altitude / cell voltage / current), per-motor
+Plots: flight overview (altitude / cell voltage / current), an **airframe
+layout diagram** (top view of the rotor positions, numbering and CW/CCW spin
+directions from the CA_ROTOR* geometry, with arm dimensions and the
+thrust-weighted **estimated CG** marked when the log contains a quasi-static
+hover), per-motor
 commands with saturation & headroom annotations, rate tracking per axis,
+raw accelerometer and gyro time series (all three axes),
 in-flight vibration spectra (FFT with dominant peak, Nyquist and LPF
-markers), a per-axis gyro **spectrogram** (PSD vs time, so rpm-driven and
-intermittent vibration is visible), and autotune convergence (model variance vs threshold + gain
-evolution) - every time plot is tinted by flight mode (mode name printed above
-the window) with autotune phases shaded on top - plus
+markers), an **acceleration power spectral density** map (2D frequency-vs-time
+response of the raw accel, summed over x/y/z - yellow = strong) and a
+per-axis gyro **spectrogram** of the same kind, and autotune convergence
+(model variance vs threshold + gain evolution) - every time plot is tinted by
+flight mode (mode name printed above the window) with autotune phases shaded
+on top - plus a **hover-thrust** plot (PX4's own estimate with its 1-sigma
+band against the configured MPC_THR_HOVER), and
 magnetic-field-vs-current and battery V-I resistance scatter plots.
 
 ### Command line
@@ -88,13 +96,14 @@ for your drone. Every field is optional — more fields unlock deeper checks.
 | Category | Checks |
 |---|---|
 | Autotune | whether the log contains an autotune run at all, state sequence, per-axis convergence time, estimate stability at hand-off, gain sanity |
-| Propulsion | hover throttle vs bench prediction (voltage+density corrected), thrust/weight, motor saturation, PWM ceiling clipping, per-motor thrust in grams, yaw-bias / CG imbalance, THR_MDL_FAC fit, current prediction |
+| Propulsion | hover throttle vs bench prediction (voltage+density corrected), thrust/weight, motor saturation, PWM ceiling clipping, per-motor thrust in grams, yaw-bias / CG imbalance (hover-gated, wind-aware, any multirotor geometry via CA_ROTOR*), THR_MDL_FAC fit, current prediction |
+| Hover thrust | PX4's `hover_thrust_estimate` vs MPC_THR_HOVER, and vs the bench-predicted hover throttle |
 | Vibration | IMU metrics, accel clipping, FFT peak identification, notch filter config, imbalanced-prop metric |
 | EKF | innovation test ratios, fault/timeout flags, in-flight resets |
 | GPS | satellites, fix, accuracy, jamming/spoofing |
 | Battery | cell sag, capacity/R_internal params, endurance estimate, MC_BAT_SCALE_EN |
 | Compass | field strength & inclination vs world model |
-| Config | rangefinder/optical-flow enabled but silent, MPC_THR_HOVER vs estimate, control-allocation geometry symmetry |
+| Config | rangefinder/optical-flow enabled but silent, control-allocation geometry symmetry |
 | System | CPU, 5V rail, RC link, logger dropouts, estimator time-slip |
 | Control | rate-tracking RMS error, sustained-oscillation detector |
 | Correlations | mag-field vs thrust/current (power interference), \|B\| vs heading (cal quality), battery internal-resistance fit from V-I scatter, hover g/W efficiency, IMU bias vs estimator limits |

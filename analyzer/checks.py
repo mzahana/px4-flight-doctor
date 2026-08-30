@@ -113,6 +113,15 @@ def check_autotune(log, spec, hover):
 
 
 # --------------------------------------------------------------------------- #
+def _mean_wind(log):
+    """Mean horizontal wind speed estimate over the log (m/s), or None."""
+    wt = log.get("wind") or log.get("wind_estimate")
+    if wt is None or "windspeed_north" not in wt:
+        return None
+    v = np.hypot(wt["windspeed_north"], wt["windspeed_east"])
+    return float(np.nanmean(v)) if np.isfinite(v).any() else None
+
+
 def check_actuators(log, spec, hover):
     f = []
     am = log.get("actuator_motors")
@@ -123,39 +132,103 @@ def check_actuators(log, spec, hover):
     m = (t > w[0]) & (t < w[1])
     n = sum(1 for i in range(12) if f"control[{i}]" in am and np.isfinite(am[f"control[{i}]"]).any())
     ctl = np.stack([am[f"control[{i}]"][m] for i in range(n)])
-    hover_mean = float(np.mean(ctl))
     sat_frac = float(np.mean(np.max(ctl, axis=0) >= 0.999))
-    sev = OK if hover_mean < 0.55 else (WARN if hover_mean < 0.68 else CRIT)
-    f.append(Finding(sev, "Propulsion", f"Mean normalized motor command in flight: {hover_mean:.2f}",
-                     detail="PX4 controls best with hover demand near 0.5; above ~0.65 the "
-                            "upper control headroom shrinks and attitude authority degrades.",
-                     doc="02_propulsion_math.md",
-                     fixes=["reduce mass or increase thrust (props/motors/6S)"] if sev >= WARN else []))
     if sat_frac > 0:
         f.append(Finding(WARN if sat_frac < 0.02 else CRIT, "Propulsion",
                          f"Motor saturation: at least one motor at 100% for {sat_frac*100:.1f}% of flight",
                          detail="During saturation the controller cannot produce the commanded torque; "
                                 "yaw is sacrificed first. System identification (autotune) run during "
                                 "saturation produces invalid models.", doc="02_propulsion_math.md"))
-    # per-motor imbalance
-    means = ctl.mean(axis=1)
-    if n == 4:
-        cw, ccw = means[[0, 1]].mean(), means[[2, 3]].mean()
-        rel = (cw - ccw) / means.mean()
-        if abs(rel) > 0.04:
-            f.append(Finding(WARN, "Propulsion",
-                             f"Standing yaw torque bias: motors 0+1 avg {cw:.3f} vs 2+3 avg {ccw:.3f} ({rel*100:+.0f}%)",
-                             detail="One spin-direction pair works harder to hold heading: motor mount "
-                                    "twist, bent arm, or prop mismatch.",
-                             fixes=["check motor mount squareness and arm straightness",
-                                    "verify all props identical and undamaged"]))
+
+    # Hover-demand and balance analysis only make sense on quasi-static samples:
+    # maneuvering and translation redistribute motor load for reasons that have
+    # nothing to do with mass, CG or airframe geometry.
+    mh = log.hover_mask(t)
+    dt = float(np.median(np.diff(t))) if len(t) > 1 else 0.0
+    hovering = int(mh.sum()) >= 30 and mh.sum() * dt >= 5.0
+    if not hovering:
+        f.append(Finding(INFO, "Propulsion",
+                         f"Mean normalized motor command in flight: {float(np.mean(ctl)):.2f}",
+                         detail="No usable quasi-static hover segment in this log (dynamic flight "
+                                "throughout), so hover-demand thresholds and per-motor balance/CG "
+                                "analysis were skipped - they are only valid in near-hover. "
+                                "Fly a calm 10 s hover to get those checks.",
+                         doc="02_propulsion_math.md"))
+        f.extend(_pwm_ceiling(log, w))
+        return f
+
+    ctl_h = np.stack([am[f"control[{i}]"][mh] for i in range(n)])
+    hover_mean = float(np.mean(ctl_h))
+    sev = OK if hover_mean < 0.55 else (WARN if hover_mean < 0.68 else CRIT)
+    f.append(Finding(sev, "Propulsion", f"Mean normalized motor command in hover: {hover_mean:.2f}",
+                     detail="PX4 controls best with hover demand near 0.5; above ~0.65 the "
+                            "upper control headroom shrinks and attitude authority degrades.",
+                     doc="02_propulsion_math.md",
+                     fixes=["reduce mass or increase thrust (props/motors/6S)"] if sev >= WARN else []))
+
+    # per-motor imbalance (any multirotor with >= 3 motors)
+    if n >= 3:
+        means = ctl_h.mean(axis=1)
+        geo = prop.rotor_geometry(log, n)
+        wind = _mean_wind(log)
+        if wind is not None and wind > 2.0:
+            wind_note = (f" Mean wind estimate was {wind:.1f} m/s - a steady lean into wind "
+                         "produces a similar signature; verify in calm air before re-rigging.")
+        elif wind is None:
+            wind_note = (" No wind estimate in this log - if it was windy, aerodynamic trim "
+                         "can contribute to this asymmetry.")
+        else:
+            wind_note = ""
+
+        # standing yaw torque: spin-direction groups from allocation geometry,
+        # falling back to the standard PX4 quad convention (0+1 CW-pair vs 2+3)
+        if geo is not None:
+            g_pos = [i for i in range(n) if geo[i][2] > 0]
+            g_neg = [i for i in range(n) if geo[i][2] < 0]
+        elif n == 4:
+            g_pos, g_neg = [0, 1], [2, 3]
+        else:
+            g_pos = g_neg = None
+        if g_pos and g_neg:
+            a, b = means[g_pos].mean(), means[g_neg].mean()
+            rel = (a - b) / means.mean()
+            if abs(rel) > 0.04:
+                lbl_a = "+".join(map(str, g_pos))
+                lbl_b = "+".join(map(str, g_neg))
+                f.append(Finding(WARN, "Propulsion",
+                                 f"Standing yaw torque bias in hover: motors {lbl_a} avg {a:.3f} "
+                                 f"vs {lbl_b} avg {b:.3f} ({rel*100:+.0f}%)",
+                                 detail="One spin-direction group works harder to hold heading: motor "
+                                        "mount twist, bent arm, or prop mismatch." + wind_note,
+                                 fixes=["check motor mount squareness and arm straightness",
+                                        "verify all props identical and undamaged"]))
+
         spread = (means.max() - means.min()) / means.mean()
         if spread > 0.08:
+            detail = ("Persistent spread during quasi-static hover indicates CG offset toward "
+                      "the hardest-working motor(s).")
+            if geo is not None:
+                shift = prop.cg_offset(geo, means)
+                dist = float(np.hypot(*shift))
+                if dist > 0.003:
+                    parts = []
+                    if abs(shift[0]) > 0.25 * dist:
+                        parts.append("forward" if shift[0] > 0 else "aft")
+                    if abs(shift[1]) > 0.25 * dist:
+                        parts.append("right" if shift[1] > 0 else "left")
+                    detail += (f" Thrust-weighted estimate: CG roughly {dist*100:.1f} cm "
+                               f"{'-'.join(parts)} of the geometric rotor center.")
             f.append(Finding(WARN, "Propulsion",
-                             f"Per-motor load spread {spread*100:.0f}% (min {means.min():.3f} / max {means.max():.3f})",
-                             detail="Persistent spread indicates CG offset toward the hardest-working motor.",
+                             f"Per-motor load spread {spread*100:.0f}% in hover "
+                             f"(min {means.min():.3f} / max {means.max():.3f})",
+                             detail=detail + wind_note,
                              fixes=["re-balance payload over geometric center"]))
-    # PWM output ceiling check
+    f.extend(_pwm_ceiling(log, w))
+    return f
+
+
+def _pwm_ceiling(log, w):
+    f = []
     mo = prop.motor_output_channels(log)
     if mo:
         ao = log.get("actuator_outputs", mo[0])
@@ -261,6 +334,74 @@ def check_propulsion_model(log, spec, hover):
                              f"Bench max thrust {bench_max:.0f} g exceeds prop rating "
                              f"{spec.prop_thrust_limit_g:.0f} g at full throttle (sea level)",
                              detail="If limiting is desired use MPC_THR_MAX, not the PWM output range."))
+    return f
+
+
+# --------------------------------------------------------------------------- #
+def check_hover_thrust_estimate(log, spec, hover):
+    """PX4's own online hover-thrust estimate vs MPC_THR_HOVER and vs the
+    measured hover command. Always reports the number, not only on mismatch."""
+    f = []
+    cfg = log.param("MPC_THR_HOVER", 0.5)
+    hte = log.get("hover_thrust_estimate")
+    if hte is None:
+        f.append(Finding(INFO, "Propulsion",
+                         f"No hover_thrust_estimate in the log - MPC_THR_HOVER = {cfg:.2f} unverified",
+                         detail="The estimator only publishes while the multicopter position "
+                                "controller is running (ALTCTL/POSCTL/AUTO). A log flown purely "
+                                "in MANUAL/STABILIZED or ACRO contains no estimate.",
+                         fixes=["fly 30 s of steady ALTCTL or POSCTL hover and re-log"],
+                         doc="03_thrust_curve.md"))
+        return f
+    t, ht, var = log.t(hte), hte["hover_thrust"], hte["hover_thrust_var"]
+    ok = (hte["valid"] == 1) & np.isfinite(ht)
+    if ok.sum() < 10:
+        f.append(Finding(INFO, "Propulsion",
+                         "hover_thrust_estimate present but never converged (no valid samples)",
+                         detail="The estimator rejects samples during aggressive vertical "
+                                "manoeuvres and while on the ground; it needs steady flight.",
+                         fixes=["hold a steady hover for 30 s in ALTCTL/POSCTL and re-log"],
+                         doc="03_thrust_curve.md"))
+        return f
+    med = float(np.nanmedian(ht[ok]))
+    sd = float(np.sqrt(np.nanmedian(var[ok])))
+    settled = float(np.nanmedian(ht[ok][-max(len(ht[ok]) // 5, 1):]))   # last 20 % of valid samples
+    delta = med - cfg
+    sev = OK if abs(delta) <= 0.05 else (WARN if abs(delta) <= 0.10 else CRIT)
+    det = [f"PX4 estimated hover thrust : {med:.3f}  (+/- {sd:.3f}, 1 sigma)",
+           f"settled value (last 20 %)  : {settled:.3f}",
+           f"MPC_THR_HOVER (configured) : {cfg:.3f}",
+           f"difference                 : {delta:+.3f} ({delta*100:+.1f} throttle points)",
+           f"valid for {100*ok.mean():.0f} % of {len(ht)} samples over "
+           f"{t[ok][-1]-t[ok][0]:.0f} s"]
+    if "norm_cmd" in hover and len(hover["norm_cmd"]):
+        obs = float(np.mean(hover["norm_cmd"]))
+        det.append(f"measured hover command     : {obs:.3f} (mean actuator_motors over the hover window)")
+    verdict = ("MPC_THR_HOVER matches PX4's estimate" if sev == OK else
+               "MPC_THR_HOVER disagrees with PX4's estimate")
+    f.append(Finding(sev, "Propulsion",
+                     f"PX4 hover-thrust estimate {med:.2f} vs MPC_THR_HOVER {cfg:.2f}: {verdict}",
+                     detail="\n".join(det),
+                     fixes=([f"param set MPC_THR_HOVER {med:.2f}",
+                             "re-measure after any THR_MDL_FAC, prop, battery or mass change"]
+                            if sev >= WARN else []),
+                     doc="03_thrust_curve.md"))
+    # independent cross-check against the bench-derived prediction
+    if spec is not None and spec.mass_kg and spec.has_bench:
+        kv, kr, _rho, _src = prop.correction_factors(hover, spec)
+        if kv and kr:
+            _need, _eq, pred = prop.predict_hover_throttle(spec, kv * kr)
+            d = med - pred
+            f.append(Finding(OK if abs(d) <= 0.07 else WARN, "Propulsion",
+                             f"Hover thrust cross-check: PX4 estimate {med:.2f} vs "
+                             f"bench prediction {pred:.2f} ({d:+.2f})",
+                             detail="Two independent estimates of the same quantity: PX4's "
+                                    "accelerometer-driven estimator, and the bench thrust table "
+                                    "corrected to flight voltage and air density. A large gap "
+                                    "means the mass, the bench table, or the props are not what "
+                                    "the model assumes (note the bench prediction is in ESC "
+                                    "throttle, so a non-zero THR_MDL_FAC shifts it).",
+                             doc="02_propulsion_math.md"))
     return f
 
 
@@ -456,16 +597,6 @@ def check_config(log, spec, hover):
     if log.param("EKF2_OF_CTRL", 0) and not log.has("vehicle_optical_flow"):
         f.append(Finding(INFO, "Config", "EKF2_OF_CTRL enabled but no optical-flow data present",
                          fixes=["param set EKF2_OF_CTRL 0 if no flow sensor is fitted"]))
-    # MPC_THR_HOVER vs estimate
-    hte = log.get("hover_thrust_estimate")
-    if hte is not None and np.any(hte["valid"]):
-        ht = float(np.nanmedian(hte["hover_thrust"][hte["valid"] == 1]))
-        cfg = log.param("MPC_THR_HOVER", 0.5)
-        if abs(ht - cfg) > 0.1:
-            f.append(Finding(WARN, "Config",
-                             f"MPC_THR_HOVER = {cfg:.2f} but estimated hover thrust is {ht:.2f}",
-                             fixes=[f"param set MPC_THR_HOVER {ht:.2f}   # after any THR_MDL_FAC change, re-measure"],
-                             doc="02_propulsion_math.md"))
     # control allocation geometry symmetry
     n = int(log.param("CA_ROTOR_COUNT", 0))
     if n:
@@ -765,6 +896,7 @@ def check_imu_bias(log, spec, hover):
     return f
 
 ALL_CHECKS = [check_flight_summary, check_autotune, check_actuators, check_propulsion_model,
+              check_hover_thrust_estimate,
               check_vibration, check_ekf, check_gps, check_battery, check_mag,
               check_config, check_system, check_tracking, check_logging,
               check_mag_vs_power, check_battery_resistance, check_hover_efficiency,

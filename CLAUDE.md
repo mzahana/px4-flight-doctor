@@ -55,7 +55,7 @@ is absent — that is the normal way checks handle logs from other airframes/fir
 
 `plots.py` (matplotlib → SVG+PNG, for the PDF) and `iplots.py` (Plotly figure *specs* as plain
 dicts, serialized to JSON for the browser) are deliberate parallel implementations of the same
-eight figures. `iplots` imports shared colors and `_autotune_spans` from `plots`. Each builder
+figure set. `iplots` imports shared colors and `_autotune_spans` from `plots`. Each builder
 returns a tuple and is registered in `ALL_FIGS` / `ALL_IPLOTS`; the generators swallow exceptions
 per figure, so a figure that can't be built is simply omitted. Adding a figure usually means
 touching both files to keep the web UI and PDF showing the same thing.

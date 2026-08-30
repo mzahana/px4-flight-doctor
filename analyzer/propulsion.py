@@ -7,6 +7,33 @@ import numpy as np
 from .vehicle import RHO_SL, air_density
 
 
+def rotor_geometry(log, n=None):
+    """[(px_fwd, py_right, km)] per rotor from the CA_ROTOR* control-allocation
+    params, or None when they are absent/unconfigured. `n` (if given) must match
+    CA_ROTOR_COUNT. KM > 0 is a CCW-spinning rotor in PX4's convention."""
+    cnt = int(log.param("CA_ROTOR_COUNT", 0) or 0)
+    if cnt < 3 or (n is not None and cnt != n):
+        return None
+    geo = []
+    for i in range(cnt):
+        px, py, km = (log.param(f"CA_ROTOR{i}_{s}") for s in ("PX", "PY", "KM"))
+        if px is None or py is None or km is None:
+            return None
+        geo.append((float(px), float(py), float(km)))
+    if all(abs(px) + abs(py) < 0.01 for px, py, _ in geo):
+        return None
+    return geo
+
+
+def cg_offset(geo, means):
+    """Thrust-weighted CG shift (m forward, m right) from the geometric rotor
+    center, treating each rotor's mean hover command as its thrust share."""
+    p = np.array([(px, py) for px, py, _ in geo])
+    w = np.asarray(means, dtype=float)
+    dx, dy = (w[:, None] * p).sum(axis=0) / w.sum() - p.mean(axis=0)
+    return float(dx), float(dy)
+
+
 def motor_output_channels(log):
     """Find the PWM output channels driving motors and their configured range.
 

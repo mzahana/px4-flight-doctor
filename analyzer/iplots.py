@@ -137,6 +137,94 @@ def ip_overview(log, spec):
 
 
 # --------------------------------------------------------------------------- #
+def ip_airframe(log, spec):
+    from .plots import _airframe_data, _cg_words, AIRFRAME_CAPTION
+    d = _airframe_data(log)
+    if d is None:
+        return None
+    pos, km, arms, means, cg = d["pos"], d["km"], d["arms"], d["means"], d["cg"]
+    r_disc = 0.38 * float(arms[arms > 0.01].min())
+    lim = float(arms.max()) + 2.1 * r_disc
+    shapes, notes, data = [], [], []
+    for (fx, ry) in pos:
+        shapes.append(dict(type="line", xref="x", yref="y", x0=0, y0=0,
+                           x1=float(ry), y1=float(fx), layer="below",
+                           line=dict(color=C["grey"], width=3), opacity=0.4))
+    for grp, name, col in ((km > 0, "CCW ↺", C["blue"]), (km < 0, "CW ↻", C["orange"])):
+        idx = [i for i in range(len(km)) if grp[i]]
+        if not idx:
+            continue
+        for i in idx:
+            fx, ry = map(float, pos[i])
+            shapes.append(dict(type="circle", xref="x", yref="y",
+                               x0=ry - r_disc, x1=ry + r_disc,
+                               y0=fx - r_disc, y1=fx + r_disc, layer="below",
+                               fillcolor=col, opacity=0.14, line=dict(width=0)))
+            shapes.append(dict(type="circle", xref="x", yref="y",
+                               x0=ry - r_disc, x1=ry + r_disc,
+                               y0=fx - r_disc, y1=fx + r_disc,
+                               line=dict(color=col, width=1.6)))
+        hover = [f"M{i} · {name}<br>fwd {pos[i][0]:+.3f} m, right {pos[i][1]:+.3f} m"
+                 + (f"<br>hover mean cmd {means[i]:.3f} "
+                    f"({means[i]/means.sum()*100:.1f}% of total)" if means is not None else "")
+                 for i in idx]
+        data.append(dict(type="scatter", mode="markers+text", name=name,
+                         x=[float(pos[i][1]) for i in idx],
+                         y=[float(pos[i][0]) for i in idx],
+                         text=[f"<b>M{i} {'CCW ↺' if km[i] > 0 else 'CW ↻'}</b>"
+                               + (f"<br>{means[i]:.3f}" if means is not None else "")
+                               for i in idx],
+                         textposition="top center", textfont=dict(size=10, color=col),
+                         marker=dict(size=9, color=col),
+                         hovertext=hover, hoverinfo="text"))
+    data.append(dict(type="scatter", mode="markers", name="geometric center",
+                     x=[0], y=[0], marker=dict(size=11, color=C["grey"],
+                                               symbol="cross-thin",
+                                               line=dict(color=C["grey"], width=2)),
+                     hovertext=["geometric rotor center"], hoverinfo="text"))
+    labeled = set()
+    for i in range(len(arms)):
+        rkey = round(float(arms[i]), 2)
+        if rkey in labeled or arms[i] < 0.01:
+            continue
+        labeled.add(rkey)
+        notes.append(dict(x=0.55 * float(pos[i][1]), y=0.55 * float(pos[i][0]),
+                          xref="x", yref="y", text=f"{arms[i]:.2f} m",
+                          showarrow=False, font=dict(size=9, color=C["grey"]),
+                          bgcolor="rgba(255,255,255,0.7)"))
+    notes.append(dict(x=0, y=0.85 * lim, xref="x", yref="y", ax=0, ay=45,
+                      text="forward", showarrow=True, arrowcolor=C["grey"],
+                      font=dict(size=9, color=C["grey"])))
+    span = float(max(np.hypot(*(p - q)) for p in pos for q in pos))
+    foot = f"max motor-to-motor span {span:.2f} m"
+    if cg is not None:
+        dx, dy = cg
+        dist = float(np.hypot(dx, dy))
+        data.append(dict(type="scatter", mode="markers", name="estimated CG",
+                         x=[dy], y=[dx], marker=dict(size=10, color=C["red"]),
+                         hovertext=[f"estimated CG<br>{dist*100:.1f} cm "
+                                    f"{_cg_words(dx, dy, dist)} of center"],
+                         hoverinfo="text"))
+        notes.append(dict(x=dy, y=dx, xref="x", yref="y",
+                          text=f"<b>est. CG {dist*100:.1f} cm {_cg_words(dx, dy, dist)}</b>",
+                          showarrow=True, arrowcolor=C["red"], ax=45, ay=40,
+                          font=dict(size=10, color=C["red"])))
+    else:
+        foot += "  ·  no quasi-static hover in log - CG not estimated"
+    notes.append(dict(x=0.98, y=0.02, xref="paper", yref="paper", xanchor="right",
+                      text=foot, showarrow=False, font=dict(size=9, color=C["grey"])))
+    lay = _layout("Airframe layout (top view)", height=560,
+                  xaxis=dict(title="right [m]", range=[-lim, lim], zeroline=False,
+                             constrain="domain"),
+                  yaxis=dict(title="forward [m]", range=[-lim, lim], zeroline=False,
+                             scaleanchor="x", scaleratio=1))
+    lay["hovermode"] = "closest"
+    lay["shapes"] = shapes
+    lay["annotations"] = notes
+    return ("airframe", "Airframe layout", AIRFRAME_CAPTION, dict(data=data, layout=lay))
+
+
+# --------------------------------------------------------------------------- #
 def ip_motors(log, spec):
     am = log.get("actuator_motors")
     if am is None:
@@ -204,6 +292,39 @@ def ip_rates(log, spec):
             "Measured body rates vs controller setpoints, per axis. In the shaded autotune "
             "bands the actual should follow the square wave crisply; lag or overshoot there "
             "is exactly what the identifier fits.",
+            dict(data=data, layout=lay))
+
+
+# --------------------------------------------------------------------------- #
+def ip_raw_imu(log, spec):
+    """Raw accelerometer and gyro time series, all three axes."""
+    sc = log.get("sensor_combined")
+    if sc is None:
+        return None
+    t = log.t(sc)
+    if len(t) < 100:
+        return None
+    data = []
+    for src, ya, pre in (("accelerometer_m_s2", "y", "accel"), ("gyro_rad", "y2", "gyro")):
+        for i, lbl in enumerate("xyz"):
+            td, yd = _ds(t, sc[f"{src}[{i}]"].astype(float), 3000)
+            data.append(_tr(td, yd, f"{pre} {lbl}", MOTOR_COLORS[i], yaxis=ya, width=0.8))
+    lay = _layout("Raw IMU: accelerometer and gyro", height=560,
+                  xaxis=dict(title="time [s]", anchor="y2"),
+                  yaxis=dict(title="accel [m/s²]", domain=[0.55, 1]),
+                  yaxis2=dict(title="gyro [rad/s]", domain=[0, 0.45]))
+    _mode_shapes(lay, log)
+    sh, an = _span_shapes(_autotune_spans(log))
+    lay["shapes"] += sh; lay["annotations"] += an
+    w = log.in_air_window()
+    if w:
+        for x, lbl in ((w[0], "takeoff"), (w[1], "landing")):
+            s_, a_ = _vline(float(x), C["grey"], lbl)
+            lay["shapes"].append(s_); lay["annotations"].append(a_)
+    return ("rawimu", "Raw IMU signals",
+            "Unfiltered accelerometer and gyro straight off the sensor (decimated for "
+            "display). Band thickness is vibration, steps are impacts or clipping, and a "
+            "slow gyro drift at rest is bias. Zoom in to inspect a single event.",
             dict(data=data, layout=lay))
 
 
@@ -393,6 +514,58 @@ def ip_batt_ri(log, spec):
             dict(data=data, layout=lay))
 
 # --------------------------------------------------------------------------- #
+def ip_accel_psd(log, spec):
+    """Flight-Review style 2D accel PSD: summed x+y+z power vs frequency vs time."""
+    sc = log.get("sensor_combined")
+    if sc is None:
+        return None
+    t = log.t(sc)
+    if len(t) < 4096:
+        return None
+    acc = None
+    for i in range(3):
+        r = _spectrogram(t, sc[f"accelerometer_m_s2[{i}]"].astype(float), target_cols=200)
+        if r is None:
+            return None
+        tt, fr, P = r
+        acc = P if acc is None else acc + P
+    sel = fr > 2
+    db = 10 * np.log10(acc[sel] + 1e-12)
+    data = [dict(type="heatmap", x=_r(tt, 1), y=_r(fr[sel], 1),
+                 z=[[round(float(v), 1) for v in row] for row in db],
+                 colorscale="Viridis", zmin=float(np.percentile(db, 40)),
+                 zmax=float(np.percentile(db, 99.9)),
+                 colorbar=dict(title="PSD<br>[dB]", thickness=12),
+                 hovertemplate="t=%{x:.0f}s  %{y:.0f} Hz<br>%{z:.0f} dB<extra></extra>")]
+    lay = _layout("Acceleration power spectral density", height=430,
+                  xaxis=dict(title="time [s]"),
+                  yaxis=dict(title="frequency [Hz]"))
+    lay["hovermode"] = "closest"
+    lay["showlegend"] = False
+    cutoff = log.param("IMU_ACCEL_CUTOFF")
+    if cutoff:
+        lay["shapes"].append(dict(type="line", xref="paper", yref="y", x0=0, x1=1,
+                                  y0=cutoff, y1=cutoff,
+                                  line=dict(color="#ffffff", width=1, dash="dot")))
+        lay["annotations"].append(dict(x=0.99, y=cutoff, xref="paper", yref="y",
+                                       text=f"accel LPF {cutoff:.0f} Hz", showarrow=False,
+                                       xanchor="right", yanchor="bottom",
+                                       font=dict(size=9, color="#ffffff")))
+    w = log.in_air_window()
+    if w:
+        for x, lbl in ((w[0], "takeoff"), (w[1], "landing")):
+            sh, an = _vline(float(x), C["grey"], lbl)
+            sh["line"]["color"] = "#ffffff"
+            lay["shapes"].append(sh); lay["annotations"].append(an)
+    return ("accelpsd", "Acceleration power spectral density",
+            "Frequency response of the raw accelerometer over time, summed over x, y and "
+            "z. Brighter (yellow) = more energy at that time and frequency. Horizontal "
+            "lines are fixed resonances, bands drifting with throttle are motor/prop "
+            "order, and broad yellow smears are what corrupts the EKF.",
+            dict(data=data, layout=lay))
+
+
+# --------------------------------------------------------------------------- #
 def ip_vibe_spectrogram(log, spec):
     sc = log.get("sensor_combined")
     if sc is None:
@@ -453,8 +626,57 @@ def ip_vibe_spectrogram(log, spec):
             dict(data=data, layout=lay))
 
 
-ALL_IPLOTS = [ip_overview, ip_motors, ip_rates, ip_vibration, ip_vibe_spectrogram,
-              ip_autotune, ip_mag_power, ip_batt_ri]
+# --------------------------------------------------------------------------- #
+def ip_hover_thrust(log, spec):
+    hte = log.get("hover_thrust_estimate")
+    if hte is None:
+        return None
+    t, ht = log.t(hte), hte["hover_thrust"].astype(float)
+    var = hte["hover_thrust_var"].astype(float)
+    ok = (hte["valid"] == 1) & np.isfinite(ht)
+    if ok.sum() < 10:
+        return None
+    sd = np.sqrt(np.clip(var, 0, None))
+    cfg = float(log.param("MPC_THR_HOVER", 0.5))
+    med = float(np.nanmedian(ht[ok]))
+    ht_v = np.where(ok, ht, np.nan)     # break the line where the estimate is invalid
+    data = [
+        dict(type="scatter", mode="lines", x=_r(t, 2), y=_r(ht + sd), name="+1 sigma",
+             line=dict(width=0), hoverinfo="skip", showlegend=False),
+        dict(type="scatter", mode="lines", x=_r(t, 2), y=_r(ht - sd), name="+/- 1 sigma",
+             line=dict(width=0), fill="tonexty", fillcolor="rgba(36,113,163,0.20)",
+             hoverinfo="skip"),
+        _tr(t, ht_v, "PX4 hover-thrust estimate", C["blue"], width=1.8),
+    ]
+    lay = _layout("Hover thrust: PX4 estimate vs MPC_THR_HOVER", height=380,
+                  xaxis=dict(title="time [s]"),
+                  yaxis=dict(title="normalized thrust [0-1]"))
+    for y, col, txt in ((cfg, C["red"], f"MPC_THR_HOVER = {cfg:.2f}"),
+                        (med, C["green"], f"median estimate = {med:.2f}")):
+        sh, an = _hline(y, col, f"<b>{txt}</b>")
+        lay["shapes"].append(sh); lay["annotations"].append(an)
+    lo = float(np.nanmin(ht[ok])); hi = float(np.nanmax(ht[ok]))
+    pad = max(0.06, 0.25 * (hi - lo))
+    lay["yaxis"]["range"] = [min(lo, cfg) - pad, max(hi, cfg) + pad]
+    _mode_shapes(lay, log)
+    w = log.in_air_window()
+    if w:
+        for x, lbl in ((w[0], "takeoff"), (w[1], "landing")):
+            sh, an = _vline(x, C["grey"], lbl)
+            lay["shapes"].append(sh); lay["annotations"].append(an)
+    return ("hoverthrust", "Hover thrust estimate",
+            f"PX4's accelerometer-driven hover-thrust estimator (blue, with its 1-sigma "
+            f"band) against the configured MPC_THR_HOVER. Line gaps are samples the "
+            f"estimator marked invalid. Median {med:.2f} vs configured {cfg:.2f} "
+            f"({med - cfg:+.2f}) - if the red line sits outside the band once the "
+            f"estimate settles, set MPC_THR_HOVER to the median.",
+            dict(data=data, layout=lay))
+
+
+ALL_IPLOTS = [ip_overview, ip_airframe, ip_motors, ip_rates, ip_raw_imu, ip_vibration,
+              ip_accel_psd, ip_vibe_spectrogram, ip_autotune, ip_mag_power,
+              ip_hover_thrust,
+              ip_batt_ri]
 
 
 def generate_interactive(log, spec):

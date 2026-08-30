@@ -70,8 +70,12 @@ a.pdf{display:inline-block;padding:9px 18px;border-radius:10px;background:var(--
   background:var(--line);color:var(--ink);font-size:11px;font-weight:700}
 .tabs button.on .n{background:var(--accent);color:var(--card)}
 .pane{display:none} .pane.on{display:block}
-.plotcard{padding:10px 14px}
+.plotcard{padding:10px 14px;scroll-margin-top:12px}
 .plotcard .cap{color:var(--muted);font-size:12.5px;margin-top:2px}
+.plotnav{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.plotnav a{font-size:12.5px;text-decoration:none;color:var(--ink);background:var(--bg);
+  border:1px solid var(--line);border-radius:20px;padding:4px 11px}
+.plotnav a:hover{border-color:var(--accent);color:var(--accent)}
 .plotdiv{width:100%;min-height:300px}
 .spin{display:none;text-align:center;color:var(--muted);padding:20px}
 .err{color:var(--crit);font-weight:600}
@@ -201,9 +205,12 @@ function render(j){
 
   h+='<div class="pane" id="pane-plots">';
   if(nplots){
-    h+='<div class="sub">drag to zoom, double-click to reset, scroll to zoom, click legend items to hide/show traces</div>';
+    h+='<div class="card"><b>Figures in this report</b><div class="plotnav">'
+      +j.plots.map(p=>'<a href="#card-'+p.id+'">'+esc(p.title)+'</a>').join('')+'</div>'
+      +'<div class="sub" style="margin:8px 0 0">drag to zoom, double-click to reset, scroll to zoom, click legend items to hide/show traces</div></div>';
     for(const p of j.plots)
-      h+='<div class="card plotcard"><div class="plotdiv" id="plot-'+p.id+'"></div>'
+      h+='<div class="card plotcard" id="card-'+p.id+'">'
+        +'<div class="plotdiv" id="plot-'+p.id+'"></div>'
         +'<div class="cap">'+esc(p.caption)+'</div></div>';
   } else h+='<div class="card">No plots could be built from this log.</div>';
   h+='</div>';
@@ -242,6 +249,28 @@ function drawPane(){
 }
 
 const dark=matchMedia('(prefers-color-scheme: dark)').matches;
+// Plotly's own camera button inherits the transparent on-screen background, so the
+// saved PNG has no white behind it. Export from a cloned figure forced to a light theme.
+function snapshotButton(pid){
+  return {
+    name:'Download plot as PNG',
+    title:'Download plot as PNG',
+    icon:Plotly.Icons.camera,
+    click:function(gd){
+      const lay=JSON.parse(JSON.stringify(gd.layout));
+      lay.paper_bgcolor='#ffffff'; lay.plot_bgcolor='#ffffff';
+      lay.font=Object.assign(lay.font||{},{color:'#1c2733'});
+      const grid='rgba(0,0,0,.10)';
+      for(const k in lay) if(k.startsWith('xaxis')||k.startsWith('yaxis'))
+        Object.assign(lay[k],{gridcolor:grid,zerolinecolor:grid});
+      const w=gd.clientWidth||1000, h=lay.height||520;
+      lay.width=w; lay.height=h; delete lay.autosize;
+      Plotly.downloadImage({data:gd.data,layout:lay},
+        {format:'png',filename:'px4doctor-'+pid,width:w,height:h,scale:2});
+    }
+  };
+}
+
 async function drawPlot(rid,pid){
   const el=$('plot-'+pid);
   if(!el) return;
@@ -255,7 +284,8 @@ async function drawPlot(rid,pid){
       Object.assign(lay[k],{gridcolor:grid,zerolinecolor:grid});
     lay.autosize=true;
     Plotly.newPlot(el,spec.data,lay,{responsive:true,displaylogo:false,scrollZoom:true,
-      modeBarButtonsToRemove:['lasso2d','select2d','autoScale2d']});
+      modeBarButtonsToRemove:['lasso2d','select2d','autoScale2d','toImage'],
+      modeBarButtonsToAdd:[snapshotButton(pid)]});
   }catch(e){ el.innerHTML='<span class="err">plot failed: '+esc(e.message)+'</span>'; }
 }
 function tog(el){

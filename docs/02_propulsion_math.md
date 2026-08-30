@@ -91,3 +91,26 @@ mapping and steals attitude authority. If you need to protect a prop or motor
 rated below full-throttle thrust, cap **collective** thrust with
 `MPC_THR_MAX` instead — attitude control can still momentarily use full
 per-motor output, which is exactly what you want in a gust.
+
+## When the balance / CG analysis is valid
+
+Per-motor load comparisons (hover demand, standing yaw-torque bias, load
+spread / CG offset) are only meaningful in **quasi-static hover**: during
+translation or maneuvering the controller redistributes motor load for
+aerodynamic and dynamic reasons that say nothing about mass or geometry.
+The analyzer therefore restricts those checks to samples where |vz| < 0.3 m/s
+and horizontal speed < 1 m/s (excluding the first 3 s after takeoff and the
+last 1 s before landing), and skips them entirely — with an INFO note — when
+the log contains less than ~5 s of such hover.
+
+Spin-direction groups and rotor positions come from the `CA_ROTOR*`
+control-allocation parameters, so the checks apply to any multirotor (quad,
+hex, octo, coax), not just the standard quad layout. When the geometry is
+available, the load spread finding also reports a thrust-weighted estimate of
+the CG offset direction in the body frame.
+
+One caveat the analyzer cannot remove: hovering in **steady wind** requires a
+constant lean, which shifts load between motors exactly like a CG offset.
+When the log carries a wind estimate above ~2 m/s the finding says so; when
+there is no wind estimate, treat a balance warning from a windy flight with
+suspicion and re-fly in calm air before re-rigging the airframe.

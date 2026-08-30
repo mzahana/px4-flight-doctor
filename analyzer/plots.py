@@ -164,6 +164,123 @@ def fig_overview(log, spec):
 
 
 # --------------------------------------------------------------------------- #
+def _airframe_data(log):
+    """Shared geometry/load data for the airframe diagram (both back-ends).
+
+    Returns dict(pos Nx2 [fwd,right], km N, arms N, means N|None, cg (dx,dy)|None)
+    or None when the log has no usable CA_ROTOR* geometry. `means`/`cg` are None
+    when the log lacks a quasi-static hover segment (same gate as the checks).
+    """
+    from .propulsion import rotor_geometry, cg_offset
+    geo = rotor_geometry(log)
+    if geo is None:
+        return None
+    pos = np.array([(px, py) for px, py, _ in geo])
+    km = np.array([g[2] for g in geo])
+    means = cg = None
+    am = log.get("actuator_motors")
+    if am is not None:
+        t = log.t(am)
+        m = log.hover_mask(t)
+        dt = float(np.median(np.diff(t))) if len(t) > 1 else 0.0
+        if int(m.sum()) >= 30 and m.sum() * dt >= 5.0:
+            vals = []
+            for i in range(len(geo)):
+                key = f"control[{i}]"
+                if key not in am or not np.isfinite(am[key][m]).any():
+                    vals = None
+                    break
+                vals.append(float(np.nanmean(am[key][m])))
+            if vals:
+                means = np.array(vals)
+                cg = cg_offset(geo, means)
+    return dict(pos=pos, km=km, arms=np.hypot(pos[:, 0], pos[:, 1]),
+                means=means, cg=cg)
+
+
+def _cg_words(dx, dy, dist):
+    parts = []
+    if abs(dx) > 0.25 * dist:
+        parts.append("forward" if dx > 0 else "aft")
+    if abs(dy) > 0.25 * dist:
+        parts.append("right" if dy > 0 else "left")
+    return "-".join(parts) or "off"
+
+
+AIRFRAME_CAPTION = (
+    "Rotor positions and expected spin directions from the CA_ROTOR* "
+    "control-allocation parameters; motor numbers are PX4's 0-based rotor/"
+    "actuator_motors indices, so mount your motors and prop directions to match "
+    "(disc size is schematic, not the real prop diameter). The value "
+    "under each motor is its mean normalized command during quasi-static hover - "
+    "equal values mean a balanced airframe. The red dot is the thrust-weighted CG "
+    "estimate relative to the geometric rotor center (grey cross); hovering in "
+    "steady wind shifts load the same way, so confirm a CG finding in calm air.")
+
+
+def fig_airframe(log, spec):
+    d = _airframe_data(log)
+    if d is None:
+        return None
+    pos, km, arms, means, cg = d["pos"], d["km"], d["arms"], d["means"], d["cg"]
+    r_disc = 0.38 * float(arms[arms > 0.01].min())
+    lim = float(arms.max()) + 2.1 * r_disc
+    fig, ax = plt.subplots(figsize=(6.4, 6.4))
+    ax.set_aspect("equal")
+    ax.set_title("Airframe layout (top view)")
+    ax.set_xlabel("right [m]")
+    ax.set_ylabel("forward [m]")
+    ax.set_xlim(-lim, lim)
+    ax.set_ylim(-lim, lim)
+    for (fx, ry) in pos:
+        ax.plot([0, ry], [0, fx], color=C["grey"], lw=2.5, alpha=0.45,
+                solid_capstyle="round", zorder=1)
+    labeled = set()
+    for i, ((fx, ry), k) in enumerate(zip(pos, km)):
+        col = C["blue"] if k > 0 else C["orange"]
+        ax.add_patch(plt.Circle((ry, fx), r_disc, facecolor=col, alpha=0.14,
+                                edgecolor=col, lw=1.6, zorder=2))
+        ax.text(ry, fx + 0.32 * r_disc, f"M{i} {'CCW ↺' if k > 0 else 'CW ↻'}",
+                ha="center", va="center", fontsize=9, fontweight="bold",
+                color=col, zorder=3)
+        if means is not None:
+            ax.text(ry, fx - 0.40 * r_disc, f"{means[i]:.3f}", ha="center",
+                    va="center", fontsize=8, color="#333333", zorder=3)
+        rkey = round(float(arms[i]), 2)
+        if rkey not in labeled and arms[i] > 0.01:
+            labeled.add(rkey)
+            ax.text(0.55 * ry, 0.55 * fx, f"{arms[i]:.2f} m", ha="center",
+                    va="center", fontsize=7.5, color=C["grey"], zorder=3,
+                    bbox=dict(fc="white", ec="none", alpha=0.7, pad=1))
+    ax.plot(0, 0, marker="+", color=C["grey"], ms=13, mew=1.8, zorder=4)
+    ax.annotate("forward", xy=(0, 0.97 * lim), xytext=(0, 0.72 * lim),
+                ha="center", fontsize=8, color=C["grey"],
+                arrowprops=dict(arrowstyle="->", color=C["grey"]))
+    span = float(max(np.hypot(*(p - q)) for p in pos for q in pos))
+    foot = f"max motor-to-motor span {span:.2f} m"
+    if cg is not None:
+        dx, dy = cg
+        dist = float(np.hypot(dx, dy))
+        ax.plot(dy, dx, marker="o", color=C["red"], ms=7, zorder=5)
+        ax.annotate(f"est. CG {dist*100:.1f} cm {_cg_words(dx, dy, dist)}",
+                    xy=(dy, dx), xytext=(0.04, 0.05), textcoords="axes fraction",
+                    fontsize=8.5, color=C["red"], fontweight="bold",
+                    arrowprops=dict(arrowstyle="->", color=C["red"], lw=0.9))
+    else:
+        foot += "  ·  no quasi-static hover in log - CG not estimated"
+    ax.text(0.98, 0.02, foot, transform=ax.transAxes, ha="right",
+            fontsize=7.5, color=C["grey"])
+    from matplotlib.patches import Patch
+    from matplotlib.lines import Line2D
+    handles = [Patch(facecolor=C["blue"], alpha=0.3, edgecolor=C["blue"], label="CCW ↺"),
+               Patch(facecolor=C["orange"], alpha=0.3, edgecolor=C["orange"], label="CW ↻")]
+    if cg is not None:
+        handles.append(Line2D([], [], marker="o", ls="", color=C["red"], label="estimated CG"))
+    ax.legend(handles=handles, loc="upper right", fontsize=7.5)
+    return ("airframe", "Airframe layout", AIRFRAME_CAPTION, *_render(fig))
+
+
+# --------------------------------------------------------------------------- #
 def fig_motors(log, spec):
     am = log.get("actuator_motors")
     if am is None:
@@ -237,6 +354,39 @@ def fig_rates(log, spec):
             "How closely the measured body rates follow the controller's setpoints. "
             "Shaded bands are autotune square-wave injections - the actual should follow "
             "them crisply; lag or overshoot there is what the identifier 'sees'.",
+            *_render(fig))
+
+
+# --------------------------------------------------------------------------- #
+def fig_raw_imu(log, spec):
+    """Raw accelerometer and gyro time series, all three axes."""
+    sc = log.get("sensor_combined")
+    if sc is None:
+        return None
+    t = log.t(sc)
+    if len(t) < 100:
+        return None
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(9, 5.6), sharex=True)
+    modes = log.mode_spans()
+    for ax, src, unit, first in ((a1, "accelerometer_m_s2", "m/s²", True),
+                                 (a2, "gyro_rad", "rad/s", False)):
+        for i, lbl in enumerate("xyz"):
+            y = sc[f"{src}[{i}]"].astype(float)
+            ax.plot(*_ds(t, y, 6000), lw=0.6, alpha=0.85, color=MOTOR_COLORS[i], label=lbl)
+        ax.set_ylabel(f"{'accel' if first else 'gyro'} [{unit}]")
+        _shade_modes(ax, modes, label=first)
+        _shade_autotune(ax, _autotune_spans(log), y=0.06 if first else 0.97)
+        _flight_markers(ax, log)
+        ax.legend(fontsize=8, ncol=3, loc="upper right", framealpha=0.95,
+                  borderpad=0.3, columnspacing=1.0, handlelength=1.2)
+    a1.set_title("Raw IMU: accelerometer (top) and gyro (bottom)")
+    a2.set_xlabel("time [s]")
+    return ("rawimu", "Raw IMU signals",
+            "Unfiltered accelerometer and gyro straight off the sensor. The z accel sits "
+            "near -9.8 m/s² in level flight; band thickness is vibration, steps are "
+            "impacts or clipping, and a slow drift on the gyro at rest is bias. Compare "
+            "the noise band before and after takeoff to separate airframe vibration from "
+            "sensor noise.",
             *_render(fig))
 
 
@@ -445,6 +595,48 @@ def fig_batt_ri(log, spec):
             *_render(fig))
 
 # --------------------------------------------------------------------------- #
+def fig_accel_psd(log, spec):
+    """Flight-Review style 2D accel PSD: summed x+y+z power vs frequency vs time."""
+    sc = log.get("sensor_combined")
+    if sc is None:
+        return None
+    t = log.t(sc)
+    if len(t) < 4096:
+        return None
+    acc = None
+    for i in range(3):
+        r = _spectrogram(t, sc[f"accelerometer_m_s2[{i}]"].astype(float))
+        if r is None:
+            return None
+        tt, fr, P = r
+        acc = P if acc is None else acc + P     # sum the three axes' power
+    sel = fr > 2
+    db = 10 * np.log10(acc[sel] + 1e-12)
+    fig, ax = plt.subplots(figsize=(9, 4.2))
+    mesh = ax.pcolormesh(tt, fr[sel], db, cmap="viridis", shading="auto",
+                         vmin=np.percentile(db, 40), vmax=np.percentile(db, 99.9))
+    _flight_markers(ax, log)
+    cutoff = log.param("IMU_ACCEL_CUTOFF")
+    if cutoff:
+        ax.axhline(cutoff, color="w", ls=":", lw=1.0)
+        ax.text(0.995, cutoff, f"accel LPF {cutoff:.0f} Hz ", color="w", fontsize=7.5,
+                fontweight="bold", transform=ax.get_yaxis_transform(),
+                ha="right", va="bottom")
+    ax.set_xlabel("time [s]")
+    ax.set_ylabel("frequency [Hz]")
+    ax.set_title("Acceleration power spectral density")
+    ax.grid(False)
+    fig.colorbar(mesh, ax=ax, label="PSD [dB, (m/s²)²/Hz]", pad=0.015, aspect=30)
+    return ("accelpsd", "Acceleration power spectral density",
+            "Frequency response of the raw accelerometer over time, summed over x, y and "
+            "z. Brighter (yellow) = more vibration energy at that time and frequency. "
+            "Horizontal lines are fixed resonances; bands that drift up and down with "
+            "throttle are motor/prop order. Broad yellow smears mean the airframe is "
+            "shaking across the whole band, which is what corrupts the EKF.",
+            *_render(fig))
+
+
+# --------------------------------------------------------------------------- #
 def fig_vibe_spectrogram(log, spec):
     sc = log.get("sensor_combined")
     if sc is None:
@@ -495,8 +687,55 @@ def fig_vibe_spectrogram(log, spec):
             *_render(fig))
 
 
-ALL_FIGS = [fig_overview, fig_motors, fig_rates, fig_vibration, fig_vibe_spectrogram,
-            fig_autotune, fig_mag_power, fig_batt_ri]
+# --------------------------------------------------------------------------- #
+def fig_hover_thrust(log, spec):
+    """PX4's online hover-thrust estimate with its 1-sigma band vs MPC_THR_HOVER."""
+    hte = log.get("hover_thrust_estimate")
+    if hte is None:
+        return None
+    t, ht = log.t(hte), hte["hover_thrust"].astype(float)
+    var = hte["hover_thrust_var"].astype(float)
+    ok = (hte["valid"] == 1) & np.isfinite(ht)
+    if ok.sum() < 10:
+        return None
+    sd = np.sqrt(np.clip(var, 0, None))
+    cfg = float(log.param("MPC_THR_HOVER", 0.5))
+    med = float(np.nanmedian(ht[ok]))
+    fig, ax = plt.subplots(figsize=(9, 3.6))
+    _shade_modes(ax, log.mode_spans(), label=True)
+    ax.fill_between(t, ht - sd, ht + sd, color=C["blue"], alpha=0.18, lw=0,
+                    label="+/- 1 sigma")
+    ht_v = np.where(ok, ht, np.nan)     # break the line where the estimate is invalid
+    ax.plot(t, ht_v, color=C["blue"], lw=1.6, label="PX4 hover-thrust estimate")
+    ax.axhline(cfg, color=C["red"], ls="--", lw=1.4,
+               label=f"MPC_THR_HOVER = {cfg:.2f}")
+    ax.axhline(med, color=C["green"], ls=":", lw=1.4,
+               label=f"median estimate = {med:.2f}")
+    ax.annotate(f"{med - cfg:+.2f}", (t[-1], (med + cfg) / 2), ha="right", va="center",
+                fontsize=9, fontweight="bold",
+                color=C["green"] if abs(med - cfg) <= 0.05 else C["red"])
+    _flight_markers(ax, log)
+    lo = float(np.nanmin(ht[ok])); hi = float(np.nanmax(ht[ok]))
+    pad = max(0.06, 0.25 * (hi - lo))
+    ax.set_ylim(min(lo, cfg) - pad, max(hi, cfg) + pad)
+    ax.set_xlabel("time [s]"); ax.set_ylabel("normalized thrust [0-1]")
+    ax.set_title("Hover thrust: PX4 estimate vs MPC_THR_HOVER")
+    ax.legend(fontsize=8, loc="lower right", ncol=2)
+    return ("hoverthrust", "Hover thrust estimate",
+            "PX4's own hover-thrust estimator (an accelerometer-driven Kalman filter) "
+            "vs the configured MPC_THR_HOVER. The blue line is the estimate, the shaded "
+            "band its 1-sigma uncertainty; gaps are samples the estimator marked invalid "
+            "(ground contact, aggressive climbs, or modes where it does not run). "
+            "The dashed red line should sit inside the band once the estimate settles - "
+            "if it does not, the altitude controller is fighting a wrong feed-forward "
+            "and MPC_THR_HOVER should be set to the median.",
+            *_render(fig))
+
+
+ALL_FIGS = [fig_overview, fig_airframe, fig_motors, fig_rates, fig_raw_imu, fig_vibration,
+            fig_accel_psd, fig_vibe_spectrogram, fig_autotune, fig_mag_power,
+            fig_hover_thrust,
+            fig_batt_ri]
 
 
 def generate_all(log, spec):
