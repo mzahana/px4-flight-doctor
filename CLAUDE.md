@@ -60,6 +60,19 @@ returns a tuple and is registered in `ALL_FIGS` / `ALL_IPLOTS`; the generators s
 per figure, so a figure that can't be built is simply omitted. Adding a figure usually means
 touching both files to keep the web UI and PDF showing the same thing.
 
+`trajectory.py` backs the four trajectory figures (plan view, 3D, satellite map, per-axis
+setpoint-vs-actual). `trajectory(log)` returns the measured track plus the position setpoint
+(`vehicle_local_position_setpoint`, falling back to `trajectory_setpoint`) with its NaNs intact,
+since a NaN is how PX4 says "this axis was not under position control" and both back-ends want
+the plotted setpoint to break there rather than interpolate. `satellite_basemap()` is the only
+part of the pipeline that touches the network: it fetches Esri World Imagery tiles, stitches and
+crops them, and returns a PNG plus its extent in the same local east/north metres as the track,
+so `plots.py` drops it into `imshow` and `iplots.py` into `layout.images` as a data URI - the
+browser needs no tile access and the PDF and web UI show identical imagery. Failures (offline,
+blocked host, no global reference in the log, no imagery at that zoom) return `None` and the map
+figure is simply omitted; `PX4DOCTOR_NO_NETWORK=1` skips the fetch and `PX4DOCTOR_TILE_URL`
+overrides the tile server.
+
 ### Web app
 
 `analyzer/webapp.py` is a small Flask app with no database: `POST /analyze` writes the upload to a

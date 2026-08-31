@@ -732,7 +732,223 @@ def fig_hover_thrust(log, spec):
             *_render(fig))
 
 
-ALL_FIGS = [fig_overview, fig_airframe, fig_motors, fig_rates, fig_raw_imu, fig_vibration,
+# --------------------------------------------------------------------------- #
+# Trajectory figures. Local frame is NED; every plot puts east on the horizontal
+# axis and up on the vertical one so the track reads like a map.
+TRAJ_COLORS = dict(act=C["blue"], sp=C["red"], start="#1e8449", end="#c0392b")
+MAP_COLORS = dict(act="#00e5ff", sp="#ffd000", start="#39ff88", end="#ff4d4d")
+
+
+def _ds_path(arrs, n=4000):
+    """Stride-downsample a path, keeping the final sample so the end marker is exact."""
+    if len(arrs[0]) <= n:
+        return arrs
+    s = len(arrs[0]) // n + 1
+    return tuple(np.append(a[::s], a[-1]) for a in arrs)
+
+
+def _traj_pair(tr, keys=("e", "n")):
+    """Actual and (joint-finite) setpoint arrays for the given axes."""
+    act = _ds_path(tuple(tr[k] for k in keys))
+    sp = tr.get("sp")
+    if not sp or any(sp.get(k) is None for k in keys):
+        return act, None
+    m = np.ones(len(sp["t"]), dtype=bool)
+    for k in keys:
+        m &= np.isfinite(sp[k])
+    if m.sum() < 10:
+        return act, None
+    return act, _ds_path(tuple(sp[k][m] for k in keys))
+
+
+def _traj_endpoints(ax, e, n, colors, z=None):
+    kw = dict(zorder=6, edgecolor="white", linewidths=1.2)
+    pts = [(e[0], n[0], colors["start"], "o", "start"),
+           (e[-1], n[-1], colors["end"], "s", "end")]
+    for x, y, c, mk, lbl in pts:
+        args = (x, y) if z is None else (x, y, z[0] if lbl == "start" else z[-1])
+        ax.scatter(*args, s=55, marker=mk, color=c, label=lbl, **kw)
+
+
+def _scalebar(ax, extent, color="white"):
+    """A round-number metre bar in the corner - satellite crops have no gridlines."""
+    span = extent[1] - extent[0]
+    for step in (1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000):
+        bar = step
+        if step >= 0.18 * span:
+            break
+    x0 = extent[0] + 0.06 * span
+    y0 = extent[2] + 0.07 * (extent[3] - extent[2])
+    ax.plot([x0, x0 + bar], [y0, y0], color=color, lw=3, solid_capstyle="butt", zorder=7)
+    ax.text(x0 + bar / 2, y0 + 0.015 * span, f"{bar:g} m", color=color, fontsize=8,
+            ha="center", va="bottom", fontweight="bold", zorder=7)
+
+
+TRAJ_XY_CAPTION = (
+    "Top-down (plan) view of the flight in the EKF's local NED frame, east right and "
+    "north up, drawn to equal scale so distances and shapes are undistorted. The origin "
+    "is the local-position reference the estimator set at initialisation. The dashed red "
+    "line is the commanded position; it breaks wherever the active flight mode was not "
+    "controlling horizontal position (manual, altitude or pure velocity control), which "
+    "is why a stick-flown segment shows the blue track alone.")
+
+
+def fig_traj_xy(log, spec):
+    from .trajectory import trajectory
+    tr = trajectory(log)
+    if tr is None:
+        return None
+    (e, n), sp = _traj_pair(tr)
+    fig, ax = plt.subplots(figsize=(7.0, 6.4))
+    ax.plot(e, n, color=TRAJ_COLORS["act"], lw=2.2, label="actual", zorder=4)
+    if sp is not None:
+        ax.plot(sp[0], sp[1], color=TRAJ_COLORS["sp"], lw=1.3, ls="--", alpha=0.95,
+                label="setpoint", zorder=5)
+    _traj_endpoints(ax, e, n, TRAJ_COLORS)
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.set_xlabel("east [m]"); ax.set_ylabel("north [m]")
+    ax.set_title("Trajectory - plan view (local NED)")
+    ax.annotate("N", (0.965, 0.90), xycoords="axes fraction", ha="center", fontsize=9,
+                fontweight="bold", color=C["grey"],
+                xytext=(0.965, 0.78), textcoords="axes fraction",
+                arrowprops=dict(arrowstyle="->", color=C["grey"], lw=1.2))
+    ax.legend(fontsize=8, loc="best")
+    return ("trajxy", "Trajectory - plan view", TRAJ_XY_CAPTION, *_render(fig))
+
+
+TRAJ_3D_CAPTION = (
+    "The same flight in three dimensions (east, north, altitude above the local origin). "
+    "The grey curve on the floor is the track's ground projection, so vertical excursions "
+    "can be told apart from horizontal ones. The dashed red path is the commanded "
+    "position and appears only over the stretches where the controller was tracking "
+    "position on all three axes.")
+
+
+def fig_traj_3d(log, spec):
+    from .trajectory import trajectory
+    tr = trajectory(log)
+    if tr is None:
+        return None
+    (e, n, u), sp = _traj_pair(tr, ("e", "n", "u"))
+    fig = plt.figure(figsize=(7.6, 6.2))
+    ax = fig.add_subplot(111, projection="3d")
+    floor = float(np.min(u)) - 0.08 * (float(np.ptp(u)) or 1.0)
+    ax.plot(e, n, np.full_like(u, floor), color=C["grey"], lw=1.0, alpha=0.5,
+            label="ground track")
+    ax.plot(e, n, u, color=TRAJ_COLORS["act"], lw=2.2, label="actual")
+    if sp is not None:
+        ax.plot(sp[0], sp[1], sp[2], color=TRAJ_COLORS["sp"], lw=1.3, ls="--",
+                alpha=0.95, label="setpoint")
+    _traj_endpoints(ax, e, n, TRAJ_COLORS, z=u)
+    ax.set_xlabel("east [m]"); ax.set_ylabel("north [m]"); ax.set_zlabel("up [m]")
+    ax.set_title("Trajectory - 3D (local NED)")
+    # equal horizontal scale; altitude keeps its own so a low hover is still readable
+    ce, cn = (e.max() + e.min()) / 2, (n.max() + n.min()) / 2
+    half = max(float(np.ptp(e)), float(np.ptp(n)), 1.0) / 2 * 1.1
+    ax.set_xlim(ce - half, ce + half); ax.set_ylim(cn - half, cn + half)
+    ax.set_zlim(floor, float(np.max(u)) + 0.08 * (float(np.ptp(u)) or 1.0))
+    ax.view_init(elev=24, azim=-58)
+    ax.legend(fontsize=8, loc="upper left")
+    return ("traj3d", "Trajectory - 3D", TRAJ_3D_CAPTION, *_render(fig))
+
+
+TRAJ_MAP_CAPTION = (
+    "The track georeferenced onto a satellite crop of the flight area. The local NED "
+    "origin is converted to WGS-84 using the estimator's reference latitude/longitude, "
+    "so this is only as accurate as the GNSS fix and the EKF's global alignment - treat "
+    "it as context, not as survey data. The crop is fetched from Esri's public World "
+    "Imagery tiles at analysis time; the figure is omitted when the log has no global "
+    "reference or the tile server cannot be reached "
+    "(set PX4DOCTOR_NO_NETWORK=1 to skip the fetch).")
+
+
+def fig_traj_map(log, spec):
+    from .trajectory import trajectory, satellite_basemap
+    tr = trajectory(log)
+    if tr is None:
+        return None
+    bm = satellite_basemap(tr["lat0"], tr["lon0"], tr["n"], tr["e"])
+    if bm is None:
+        return None
+    import matplotlib.image as mpimg
+    img = mpimg.imread(io.BytesIO(bm["png"]), format="png")
+    (e, n), sp = _traj_pair(tr)
+    fig, ax = plt.subplots(figsize=(7.0, 6.6))
+    ax.imshow(img, extent=bm["extent"], origin="upper", interpolation="bilinear",
+              zorder=0)
+    ax.plot(e, n, color=MAP_COLORS["act"], lw=2.4, label="actual", zorder=4)
+    if sp is not None:
+        ax.plot(sp[0], sp[1], color=MAP_COLORS["sp"], lw=1.4, ls="--", alpha=0.95,
+                label="setpoint", zorder=5)
+    _traj_endpoints(ax, e, n, MAP_COLORS)
+    ax.set_xlim(bm["extent"][0], bm["extent"][1])
+    ax.set_ylim(bm["extent"][2], bm["extent"][3])
+    ax.set_aspect("equal")
+    ax.grid(False)
+    _scalebar(ax, bm["extent"])
+    lat, lon = tr["lat0"], tr["lon0"]
+    ax.set_xlabel("east [m]"); ax.set_ylabel("north [m]")
+    ax.set_title("Trajectory over satellite imagery")
+    box = dict(facecolor="black", alpha=0.45, edgecolor="none", pad=1.8)
+    ax.text(0.995, 0.008, f"{bm['attrib']}  ·  z{bm['zoom']}", transform=ax.transAxes,
+            ha="right", va="bottom", fontsize=6.5, color="white", bbox=box, zorder=7)
+    ax.text(0.005, 0.992, f"origin {lat:.6f}, {lon:.6f}", transform=ax.transAxes,
+            ha="left", va="top", fontsize=7, color="white", bbox=box, zorder=7)
+    leg = ax.legend(fontsize=8, loc="upper right", facecolor="black", framealpha=0.45)
+    for txt in leg.get_texts():
+        txt.set_color("white")
+    return ("trajmap", "Trajectory on satellite map", TRAJ_MAP_CAPTION, *_render(fig))
+
+
+TRAJ_COMP_CAPTION = (
+    "Each position axis against time, commanded (dashed red) versus estimated (blue). "
+    "Gaps in the setpoint are the stretches where that axis was not under position "
+    "control. The RMS figure in each panel is the tracking error over the samples where "
+    "a setpoint existed: a persistent offset points at a trim or estimator bias, a lag "
+    "that grows with speed at an under-gained position loop (MPC_XY_P / MPC_Z_P), and "
+    "overshoot after each step at too much velocity gain.")
+
+_NOTE_BOX = dict(facecolor="white", alpha=0.72, edgecolor="none", pad=1.5)
+_TRAJ_AXES = (("n", "north [m]", "north"), ("e", "east [m]", "east"),
+              ("u", "altitude [m]", "up"))
+
+
+def fig_traj_components(log, spec):
+    from .trajectory import trajectory, track_errors
+    tr = trajectory(log)
+    if tr is None:
+        return None
+    sp, errs = tr.get("sp"), track_errors(tr)
+    modes, at = log.mode_spans(), _autotune_spans(log)
+    fig, axes = plt.subplots(3, 1, figsize=(9, 7.2), sharex=True)
+    for i, (key, ylab, name) in enumerate(_TRAJ_AXES):
+        ax = axes[i]
+        _shade_modes(ax, modes, label=(i == 0))
+        _shade_autotune(ax, at)
+        if sp and sp.get(key) is not None:
+            ax.plot(*_ds(sp["t"], sp[key]), color=C["red"], lw=1.4, ls="--",
+                    label="setpoint")
+        ax.plot(*_ds(tr["t"], tr[key]), color=C["blue"], lw=1.3, label="actual")
+        _flight_markers(ax, log)
+        ax.set_ylabel(ylab)
+        if key in errs:
+            rms, cnt = errs[key]
+            ax.annotate(f"RMS error {rms:.2f} m  ({cnt} samples)",
+                        (0.995, 0.04), xycoords="axes fraction", ha="right",
+                        fontsize=8, fontweight="bold", bbox=_NOTE_BOX,
+                        color=C["green"] if rms < 0.5 else C["orange"])
+        elif sp is None or sp.get(key) is None:
+            ax.annotate(f"no {name} setpoint logged", (0.995, 0.04),
+                        xycoords="axes fraction", ha="right", fontsize=8,
+                        color=C["grey"], bbox=_NOTE_BOX)
+        ax.legend(fontsize=8, loc="upper left", ncol=2)
+    axes[0].set_title("Position setpoint vs actual, per axis")
+    axes[-1].set_xlabel("time [s]")
+    return ("trajcomp", "Position tracking per axis", TRAJ_COMP_CAPTION, *_render(fig))
+
+
+ALL_FIGS = [fig_overview, fig_traj_xy, fig_traj_3d, fig_traj_map, fig_traj_components,
+            fig_airframe, fig_motors, fig_rates, fig_raw_imu, fig_vibration,
             fig_accel_psd, fig_vibe_spectrogram, fig_autotune, fig_mag_power,
             fig_hover_thrust,
             fig_batt_ri]

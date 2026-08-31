@@ -53,7 +53,11 @@ reset, click legend entries to hide/show individual traces. The
 **Download PDF** button exports a structured PDF with static versions of the
 same figures embedded.
 
-Plots: flight overview (altitude / cell voltage / current), an **airframe
+Plots: flight overview (altitude / cell voltage / current), **trajectory
+plots** (a top-down plan view and a 3D view in the local NED frame, the same
+track georeferenced onto a **satellite crop** of the flight area, and a
+per-axis north/east/altitude **setpoint-vs-actual** panel with the RMS tracking
+error), an **airframe
 layout diagram** (top view of the rotor positions, numbering and CW/CCW spin
 directions from the CA_ROTOR* geometry, with arm dimensions and the
 thrust-weighted **estimated CG** marked when the log contains a quasi-static
@@ -237,6 +241,7 @@ analyzer/
   vehicle.py             vehicle spec loading (YAML / interactive)
   propulsion.py          bench-table physics, THR_MDL_FAC fit
   checks.py              all analysis checks
+  trajectory.py          trajectory extraction + satellite basemap fetching
   plots.py               static matplotlib figures (for PDF export)
   iplots.py              interactive Plotly figure specs (for the web UI)
   summary.py             at-a-glance flight stats for the web dashboard

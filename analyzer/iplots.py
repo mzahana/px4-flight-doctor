@@ -673,7 +673,169 @@ def ip_hover_thrust(log, spec):
             dict(data=data, layout=lay))
 
 
-ALL_IPLOTS = [ip_overview, ip_airframe, ip_motors, ip_rates, ip_raw_imu, ip_vibration,
+# --------------------------------------------------------------------------- #
+# Trajectory figures (see plots.py for the matplotlib twins and the captions).
+def _traj_traces(tr, keys, colors, dims=2):
+    """Actual + setpoint traces for a spatial plot, actual drawn first (underneath)."""
+    from .plots import _ds_path, _traj_pair
+    act, sp = _traj_pair(tr, keys)
+    kind = "scatter3d" if dims == 3 else "scatter"
+    axis = dict(zip("xyz", act))
+
+    def pt(a, i, name, color, symbol):
+        d = dict(type=kind, mode="markers", name=name, hoverinfo="text",
+                 hovertext=[name],
+                 marker=dict(size=11 if dims == 2 else 6, color=color,
+                             symbol=symbol,
+                             line=dict(color="white", width=1.5)))
+        for k, arr in zip("xyz", a):
+            d[k] = [round(float(arr[i]), 3)]
+        return d
+
+    traces = [dict(type=kind, mode="lines", name="actual",
+                   line=dict(color=colors["act"], width=3.4 if dims == 2 else 5),
+                   **{k: _r(v, 3) for k, v in axis.items()})]
+    if sp is not None:
+        traces.append(dict(type=kind, mode="lines", name="setpoint",
+                           line=dict(color=colors["sp"], width=2 if dims == 2 else 3,
+                                     dash="dash"),
+                           **{k: _r(v, 3) for k, v in zip("xyz", sp)}))
+    traces.append(pt(act, 0, "start", colors["start"],
+                     "circle" if dims == 2 else "circle"))
+    traces.append(pt(act, -1, "end", colors["end"],
+                     "square" if dims == 2 else "square"))
+    return traces
+
+
+def ip_traj_xy(log, spec):
+    from .plots import TRAJ_COLORS, TRAJ_XY_CAPTION
+    from .trajectory import trajectory
+    tr = trajectory(log)
+    if tr is None:
+        return None
+    lay = _layout("Trajectory - plan view (local NED)", height=560,
+                  xaxis=dict(title="east [m]", constrain="domain"),
+                  yaxis=dict(title="north [m]", scaleanchor="x", scaleratio=1))
+    lay["hovermode"] = "closest"
+    return ("trajxy", "Trajectory - plan view",
+            TRAJ_XY_CAPTION + " Drag to zoom, double-click to reset.",
+            dict(data=_traj_traces(tr, ("e", "n"), TRAJ_COLORS), layout=lay))
+
+
+def ip_traj_3d(log, spec):
+    from .plots import TRAJ_COLORS, TRAJ_3D_CAPTION
+    from .trajectory import trajectory
+    tr = trajectory(log)
+    if tr is None:
+        return None
+    data = _traj_traces(tr, ("e", "n", "u"), TRAJ_COLORS, dims=3)
+    e, n, u = tr["e"], tr["n"], tr["u"]
+    floor = float(np.min(u)) - 0.08 * (float(np.ptp(u)) or 1.0)
+    data.insert(0, dict(type="scatter3d", mode="lines", name="ground track",
+                        x=_r(e, 3), y=_r(n, 3),
+                        z=[round(floor, 3)] * len(e),
+                        line=dict(color=C["grey"], width=2), opacity=0.55,
+                        hoverinfo="skip"))
+    span = max(float(np.ptp(e)), float(np.ptp(n)), 1.0)
+    lay = _layout("Trajectory - 3D (local NED)", height=620)
+    lay.pop("hovermode", None)
+    lay["margin"] = dict(l=0, r=0, t=45, b=0)
+    lay["scene"] = dict(
+        xaxis=dict(title="east [m]", range=[(e.max() + e.min()) / 2 - span * 0.55,
+                                            (e.max() + e.min()) / 2 + span * 0.55]),
+        yaxis=dict(title="north [m]", range=[(n.max() + n.min()) / 2 - span * 0.55,
+                                             (n.max() + n.min()) / 2 + span * 0.55]),
+        zaxis=dict(title="up [m]"),
+        aspectmode="manual", aspectratio=dict(x=1, y=1, z=0.7),
+        camera=dict(eye=dict(x=1.5, y=-1.6, z=0.9)))
+    return ("traj3d", "Trajectory - 3D",
+            TRAJ_3D_CAPTION + " Drag to orbit, scroll to zoom.",
+            dict(data=data, layout=lay))
+
+
+def ip_traj_map(log, spec):
+    import base64
+    from .plots import MAP_COLORS, TRAJ_MAP_CAPTION
+    from .trajectory import trajectory, satellite_basemap
+    tr = trajectory(log)
+    if tr is None:
+        return None
+    bm = satellite_basemap(tr["lat0"], tr["lon0"], tr["n"], tr["e"])
+    if bm is None:
+        return None
+    e0, e1, n0, n1 = bm["extent"]
+    lay = _layout("Trajectory over satellite imagery", height=620,
+                  xaxis=dict(title="east [m]", range=[e0, e1], showgrid=False,
+                             zeroline=False, constrain="domain"),
+                  yaxis=dict(title="north [m]", range=[n0, n1], showgrid=False,
+                             zeroline=False, scaleanchor="x", scaleratio=1))
+    lay["hovermode"] = "closest"
+    # the crop is embedded rather than tiled live, so the browser needs no network
+    # and the web UI and the PDF show byte-identical imagery
+    lay["images"] = [dict(source="data:image/png;base64," +
+                          base64.b64encode(bm["png"]).decode(),
+                          xref="x", yref="y", x=e0, y=n1, sizex=e1 - e0, sizey=n1 - n0,
+                          xanchor="left", yanchor="top", sizing="stretch",
+                          layer="below", opacity=1)]
+    lay["annotations"].append(dict(
+        x=1, y=0, xref="paper", yref="paper", xanchor="right", yanchor="bottom",
+        text=f"{bm['attrib']} · z{bm['zoom']} · origin {tr['lat0']:.6f}, {tr['lon0']:.6f}",
+        showarrow=False, font=dict(size=9, color="white"),
+        bgcolor="rgba(0,0,0,0.45)"))
+    lay["legend"] = dict(x=0.99, y=0.99, xanchor="right", yanchor="top",
+                         bgcolor="rgba(0,0,0,0.45)", font=dict(size=11, color="white"))
+    return ("trajmap", "Trajectory on satellite map",
+            TRAJ_MAP_CAPTION, dict(data=_traj_traces(tr, ("e", "n"), MAP_COLORS),
+                                   layout=lay))
+
+
+def ip_traj_components(log, spec):
+    from .plots import TRAJ_COMP_CAPTION, _TRAJ_AXES
+    from .trajectory import trajectory, track_errors
+    tr = trajectory(log)
+    if tr is None:
+        return None
+    sp, errs = tr.get("sp"), track_errors(tr)
+    doms = [[0.70, 1.0], [0.36, 0.64], [0.0, 0.28]]
+    axes = {}
+    data = []
+    for i, (key, ylab, name) in enumerate(_TRAJ_AXES):
+        ya = "y" if i == 0 else f"y{i + 1}"
+        axes[f"yaxis{i + 1}" if i else "yaxis"] = dict(title=ylab, domain=doms[i])
+        if sp and sp.get(key) is not None:
+            data.append(_tr(*_ds(sp["t"], sp[key]), f"{name} setpoint", C["red"],
+                            yaxis=ya, dash="dash"))
+        data.append(_tr(*_ds(tr["t"], tr[key]), f"{name} actual", C["blue"], yaxis=ya))
+    lay = _layout("Position setpoint vs actual, per axis", height=680,
+                  xaxis=dict(title="time [s]", anchor="y3"), **axes)
+    for i, (key, ylab, name) in enumerate(_TRAJ_AXES):
+        if key in errs:
+            rms, cnt = errs[key]
+            txt = f"RMS error {rms:.2f} m ({cnt} samples)"
+            col = C["green"] if rms < 0.5 else C["orange"]
+        else:
+            txt, col = f"no {name} setpoint logged", C["grey"]
+        lay["annotations"].append(dict(x=1, y=doms[i][0], xref="paper", yref="paper",
+                                       xanchor="right", yanchor="bottom",
+                                       text=f"<b>{txt}</b>", showarrow=False,
+                                       font=dict(size=11, color=col),
+                                       bgcolor="rgba(255,255,255,0.72)"))
+    _mode_shapes(lay, log)
+    sh, an = _span_shapes(_autotune_spans(log))
+    lay["shapes"] += sh
+    lay["annotations"] += an
+    w = log.in_air_window()
+    if w:
+        for x, lbl in ((w[0], "takeoff"), (w[1], "landing")):
+            s_, n_ = _vline(x, C["grey"], lbl)
+            lay["shapes"].append(s_)
+            lay["annotations"].append(n_)
+    return ("trajcomp", "Position tracking per axis", TRAJ_COMP_CAPTION,
+            dict(data=data, layout=lay))
+
+
+ALL_IPLOTS = [ip_overview, ip_traj_xy, ip_traj_3d, ip_traj_map, ip_traj_components,
+              ip_airframe, ip_motors, ip_rates, ip_raw_imu, ip_vibration,
               ip_accel_psd, ip_vibe_spectrogram, ip_autotune, ip_mag_power,
               ip_hover_thrust,
               ip_batt_ri]
