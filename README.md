@@ -123,6 +123,7 @@ for your drone. Every field is optional — more fields unlock deeper checks.
 | [docs/05_autotune.md](docs/05_autotune.md) | how autotune's system-ID works, what corrupts it, gain forms |
 | [docs/06_ekf_health.md](docs/06_ekf_health.md) | innovations, test ratios, resets, magnetometer sanity |
 | [docs/07_correlations.md](docs/07_correlations.md) | mag-vs-current interference, internal-resistance fitting, g/W efficiency, IMU bias limits |
+| [docs/08_trajectory.md](docs/08_trajectory.md) | NED frame and local origin, why setpoints have gaps, reading tracking error, satellite-map caveats |
 
 ## Abbreviations
 
@@ -255,8 +256,13 @@ web/
   plotly.min.js          vendored Plotly (keeps the UI fully offline)
 
 docs/                    tuning math explained (see table above)
+LICENSE                  MIT
 ```
 
 Adding a check: write a function in `analyzer/checks.py` returning
 `list[Finding]` and append it to `ALL_CHECKS`. A crashing check is reported
 at the bottom of the output but never kills the rest of the report.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

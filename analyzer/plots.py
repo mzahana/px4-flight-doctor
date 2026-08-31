@@ -790,7 +790,7 @@ TRAJ_XY_CAPTION = (
     "is the local-position reference the estimator set at initialisation. The dashed red "
     "line is the commanded position; it breaks wherever the active flight mode was not "
     "controlling horizontal position (manual, altitude or pure velocity control), which "
-    "is why a stick-flown segment shows the blue track alone.")
+    "is why a stick-flown segment shows the blue track alone. See docs/08_trajectory.md.")
 
 
 def fig_traj_xy(log, spec):
@@ -821,7 +821,7 @@ TRAJ_3D_CAPTION = (
     "The grey curve on the floor is the track's ground projection, so vertical excursions "
     "can be told apart from horizontal ones. The dashed red path is the commanded "
     "position and appears only over the stretches where the controller was tracking "
-    "position on all three axes.")
+    "position on all three axes. See docs/08_trajectory.md.")
 
 
 def fig_traj_3d(log, spec):
@@ -859,7 +859,7 @@ TRAJ_MAP_CAPTION = (
     "it as context, not as survey data. The crop is fetched from Esri's public World "
     "Imagery tiles at analysis time; the figure is omitted when the log has no global "
     "reference or the tile server cannot be reached "
-    "(set PX4DOCTOR_NO_NETWORK=1 to skip the fetch).")
+    "(set PX4DOCTOR_NO_NETWORK=1 to skip the fetch). See docs/08_trajectory.md.")
 
 
 def fig_traj_map(log, spec):
@@ -906,7 +906,7 @@ TRAJ_COMP_CAPTION = (
     "control. The RMS figure in each panel is the tracking error over the samples where "
     "a setpoint existed: a persistent offset points at a trim or estimator bias, a lag "
     "that grows with speed at an under-gained position loop (MPC_XY_P / MPC_Z_P), and "
-    "overshoot after each step at too much velocity gain.")
+    "overshoot after each step at too much velocity gain. See docs/08_trajectory.md.")
 
 _NOTE_BOX = dict(facecolor="white", alpha=0.72, edgecolor="none", pad=1.5)
 _TRAJ_AXES = (("n", "north [m]", "north"), ("e", "east [m]", "east"),
